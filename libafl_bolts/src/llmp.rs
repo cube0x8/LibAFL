@@ -114,7 +114,7 @@ const DEFAULT_CLIENT_TIMEOUT_SECS: u64 = 60 * 5;
 /// The max number of pages a [`client`] may have mapped that were not yet read by the [`broker`]
 /// Usually, this value should not exceed `1`, else the broker cannot keep up with the amount of incoming messages.
 /// Instead of increasing this value, you may consider sending new messages at a lower rate, else your Sender will eventually `OOM`.
-const LLMP_CFG_MAX_PENDING_UNREAD_PAGES: usize = 3;
+const LLMP_CFG_MAX_PENDING_UNREAD_PAGES: usize = 10;
 /// We'll start off with 256 megabyte maps per fuzzer client
 #[cfg(not(feature = "llmp_small_maps"))]
 const LLMP_CFG_INITIAL_MAP_SIZE: usize = 1 << 28;
@@ -820,6 +820,7 @@ impl LlmpPage {
         let receivers_joined_count = &mut self.receivers_joined_count;
         //receivers_joined_count.fetch_add(1, Ordering::Relaxed);
         receivers_joined_count.store(1, Ordering::Relaxed);
+        log::debug!("Broker: Joined page of client {:?}. It's now safe to unmap.", self.sender_id);
     }
 
     #[inline]
@@ -827,6 +828,7 @@ impl LlmpPage {
         let receivers_joined_count = &mut self.receivers_joined_count;
         //receivers_joined_count.fetch_add(1, Ordering::Relaxed);
         receivers_joined_count.store(1, Ordering::Relaxed);
+        log::debug!("Broker: Left page of client {:?}. It's now safe to unmap.", self.sender_id);
     }
 }
 
@@ -855,6 +857,8 @@ where
     last_msg_sent: *const LlmpMsg,
     /// A vec of page wrappers, each containing an initialized [`ShMem`]
     out_shmems: Vec<LlmpSharedMap<SP::ShMem>>,
+    /// total messages sent to the broker
+    messages_count: i64,
     /// A vec of pages that we previously used, but that have served its purpose
     /// (no potential receivers are left).
     /// Instead of freeing them, we keep them around to potentially reuse them later,
@@ -888,6 +892,7 @@ where
         Ok(Self {
             id,
             last_msg_sent: ptr::null_mut(),
+            messages_count: 0,
             out_shmems: vec![LlmpSharedMap::new(
                 id,
                 shmem_provider.new_shmem(LLMP_CFG_INITIAL_MAP_SIZE)?,
@@ -989,7 +994,7 @@ where
     pub fn safe_to_unmap(&self) -> bool {
         let current_out_shmem = self.out_shmems.last().unwrap();
         unsafe {
-            // log::info!("Reading safe_to_unmap from {:?}", current_out_shmem.page() as *const _);
+            log::info!("PID {}: Client {:?} Reading safe_to_unmap from {:?}", std::process::id(), self.id, current_out_shmem.page() as *const _);
             (*current_out_shmem.page())
                 .receivers_joined_count
                 .load(Ordering::Relaxed)
@@ -1023,6 +1028,7 @@ where
             last_msg_sent,
             out_shmems: vec![out_shmem],
             // drop pages to the broker if it already read them
+            messages_count: 0,
             keep_pages_forever: false,
             has_unsent_message: false,
             shmem_provider,
@@ -1034,6 +1040,7 @@ where
     /// eventually. This function This function sees if we can deallocate older pages.
     /// The broker would have informed us by setting the safe_to_unmap-flag.
     unsafe fn prune_old_pages(&mut self) {
+        log::debug!("PID {}: Client #{:?} is a tidy guy and started pruning...", std::process::id(), self.id);
         // Exclude the current page by splitting of the last element for this iter
         let mut unmap_until_excl = 0;
         for map in self.out_shmems.split_last_mut().unwrap().1 {
@@ -1044,12 +1051,14 @@ where
             unmap_until_excl += 1;
         }
 
+        log::debug!("PID {}: Client #{:?} current out_shmems size is: {}", std::process::id(), self.id, self.out_shmems.len());
+
         if unmap_until_excl == 0 && self.out_shmems.len() > LLMP_CFG_MAX_PENDING_UNREAD_PAGES {
             // Looks like nobody is listening to our pages anymore! :/
             // The n old pages have not been touched yet.
             // We send one last information to the broker before quitting.
             self.send_buf(LLMP_SLOW_RECEIVER_PANIC, &[]).unwrap();
-            panic!("The receiver/broker could not process our sent llmp messages in time. Either we're sending too many messages too fast, the broker got stuck, or it crashed. Giving up.");
+            panic!("PID {}: The receiver/broker could not process our (client {:?}) sent llmp messages in time. Either we're sending too many messages too fast, the broker got stuck, or it crashed. Giving up.", std::process::id(), self.id);
         }
 
         // Remove all maps that the broker already mapped, move them to our unused pages cache
@@ -1066,10 +1075,12 @@ where
             (*page).magic = PAGE_DEINITIALIZED_MAGIC;
 
             #[cfg(feature = "llmp_debug")]
-            log::debug!("Moving unused map to cache: {map:?} {:x?}", map.page());
+            log::debug!("PID {}: Client {:?} is Moving unused map to cache: {map:?} {:x?}", std::process::id(), self.id, map.page());
             self.unused_shmem_cache
                 .insert(self.unused_shmem_cache.len(), map);
         }
+
+        log::debug!("PID {}: Client {:?} is done pruning. Its out_shmems is now {:?}", std::process::id(), self.id, self.out_shmems.len());
     }
 
     /// Intern: Special allocation function for `EOP` messages (and nothing else!)
@@ -1123,11 +1134,13 @@ where
 
         #[cfg(feature = "llmp_debug")]
         log::info!(
-            "Allocating {} bytes on page {:?} / map {:?} (last msg: {:?})",
+            "PID {:?}: Client {:?} Allocating {} bytes on page {:?} / map {:?} (last msg: {:?})",
+            std::process::id(),
+            self.id,
             buf_len,
             page,
             &map.shmem.id().as_str(),
-            last_msg
+            last_msg,
         );
 
         let msg_start = (*page).messages.as_mut_ptr() as usize + (*page).size_used;
@@ -1138,7 +1151,7 @@ where
             - size_of::<LlmpMsg>();
 
         #[cfg(feature = "llmp_debug")]
-        log::trace!(
+        log::debug!(
             "{page:?} {:?} size_used={:x} buf_len_padded={:x} EOP_MSG_SIZE={:x} size_total={}",
             &(*page),
             (*page).size_used,
@@ -1152,7 +1165,7 @@ where
             > (*page).size_total
         {
             #[cfg(feature = "llmp_debug")]
-            log::info!("LLMP: Page full.");
+            log::info!("PID {}: Client {:?} LLMP Page full.", std::process::id(), self.id);
 
             /* We're full. */
             return None;
@@ -1195,7 +1208,13 @@ where
     /// If `overwrite_client_id` is `false`, the message's `sender` won't be touched (for broker forwarding)
     #[inline(never)] // Not inlined to make cpu-level reodering (hopefully?) improbable
     unsafe fn send(&mut self, msg: *mut LlmpMsg, overwrite_client_id: bool) -> Result<(), Error> {
-        // log::info!("Sending msg {:?}", msg);
+        self.messages_count += 1;
+        log::info!("PID {}: Client {:?} Sending msg {:?} / msg id {:?}. Total messages sent: {}", 
+            std::process::id(), 
+            self.id, msg, 
+            (*msg).message_id,
+            self.messages_count
+        );
 
         assert!(self.last_msg_sent != msg, "Message sent twice!");
         assert!(
@@ -1292,7 +1311,8 @@ where
             let bt = "<n/a (release)>";
             let shm = self.out_shmems.last().unwrap();
             log::info!(
-                "LLMP_DEBUG: End of page reached for map {} with len {}, sending EOP, bt: {:?}",
+                "PID {}: LLMP_DEBUG: End of page reached for map {} with len {}, sending EOP, bt: {:?}",
+                std::process::id(),
                 shm.shmem.id(),
                 shm.shmem.len(),
                 bt
@@ -1302,7 +1322,7 @@ where
         // If we want to get red if old pages, (client to broker), do that now
         if !self.keep_pages_forever {
             #[cfg(feature = "llmp_debug")]
-            log::debug!("LLMP DEBUG: pruning old pages");
+            log::debug!("PID {}: LLMP DEBUG: pruning old pages", std::process::id());
             self.prune_old_pages();
         }
 
@@ -1311,7 +1331,7 @@ where
         let next_min_shmem_size = next_shmem_size((*old_map).max_alloc_size);
 
         #[cfg(feature = "llmp_debug")]
-        log::info!("Next min ShMem Size {next_min_shmem_size}",);
+        log::info!("PID {}: Next min ShMem Size {next_min_shmem_size}", std::process::id());
 
         // Get a new shared page, or reuse an old one, if available.
         let mut new_map_shmem =
@@ -1320,13 +1340,13 @@ where
         let new_map = new_map_shmem.page_mut();
 
         #[cfg(feature = "llmp_debug")]
-        log::info!("got new map at: {new_map:?}");
+        log::info!("PID {}: got new map at: {new_map:?}", std::process::id());
 
         // New maps always start with 0 as message id -> No messages yet.
         (*new_map).current_msg_id.store(0, Ordering::Release);
 
         #[cfg(feature = "llmp_debug")]
-        log::info!("Setting max alloc size: {:?}", (*old_map).max_alloc_size);
+        log::info!("PID {}: Setting max alloc size: {:?}", std::process::id(), (*old_map).max_alloc_size);
 
         // Allocations may never shrink:
         // keep track of the max message size we allocated across maps.
@@ -1342,10 +1362,13 @@ where
         (*end_of_page_msg).shm_str = *new_map_shmem.shmem.id().as_array();
 
         /* Send the last msg (the EOP message) on the old buf */
+        log::debug!("PID {}: Sending EOP.", std::process::id());
         self.send(out, true)?;
 
         // Set the new page as current page.
         self.out_shmems.push(new_map_shmem);
+        log::debug!("PID {}: Client #{} pushed a new page. New out_shmems size: {:?}", std::process::id(), self.id.0, self.out_shmems.len());
+        self.messages_count = 0;
         // We never sent a msg on the new buf */
         self.last_msg_sent = ptr::null_mut();
 
@@ -1364,7 +1387,7 @@ where
         }
 
         #[cfg(feature = "llmp_debug")]
-        log::debug!("Handled out eop");
+        log::debug!("PID {}: Client #{:?} Handled out eop", std::process::id(), self.id);
 
         match unsafe { self.alloc_next_if_space(buf_len) } {
             Some(msg) => Ok(msg),
@@ -1519,6 +1542,8 @@ where
     id: ClientId,
     /// Pointer to the last message received
     last_msg_recvd: *const LlmpMsg,
+    /// Total messages handled
+    messages_handled_count: i64,
     /// Time we received the last message from this receiver
     #[cfg(feature = "std")]
     last_msg_time: Duration,
@@ -1572,6 +1597,7 @@ where
             id: ClientId(0),
             current_recv_shmem,
             last_msg_recvd,
+            messages_handled_count: 0,
             shmem_provider,
             highest_msg_id: MessageId(0),
             // We don't know the last received time, just assume the current time.
@@ -1644,7 +1670,9 @@ where
                     return Err(Error::shutting_down());
                 }
                 LLMP_TAG_END_OF_PAGE => {
-                    log::debug!("Received end of page, allocating next");
+                    self.messages_handled_count += 1;
+                    log::debug!("Broker: Received end of page, allocating next. Total handled messages: {}", self.messages_handled_count);
+                    self.messages_handled_count = 0;
                     // Handle end of page
                     assert!(
                         (*msg).buf_len >= size_of::<LlmpPayloadSharedMapInfo>() as u64,
@@ -2047,6 +2075,7 @@ where
             llmp_out: LlmpSender {
                 id: ClientId(0),
                 last_msg_sent: ptr::null_mut(),
+                messages_count: 0,
                 out_shmems: vec![LlmpSharedMap::new(
                     ClientId(0),
                     shmem_provider.new_shmem(next_shmem_size(0))?,
@@ -2155,6 +2184,7 @@ where
             id: ClientId(0), // Will be auto-filled
             current_recv_shmem: client_page,
             last_msg_recvd: ptr::null_mut(),
+            messages_handled_count: 0,
             shmem_provider: self.shmem_provider.clone(),
             highest_msg_id: MessageId(0),
             // We don't know the last received time, just assume the current time.
@@ -2275,7 +2305,7 @@ where
                         {
                             self.clients_to_remove.push(i);
                             #[cfg(feature = "llmp_debug")]
-                            println!("Client #{i} timed out. Removing.");
+                            log::error!("Client #{i} timed out. Removing.");
                         }
                     }
                     new_messages = has_messages;
@@ -2733,6 +2763,7 @@ where
             let mut tcp_incoming_sender = LlmpSender {
                 id: llmp_tcp_id,
                 last_msg_sent: ptr::null_mut(),
+                messages_count: 0,
                 out_shmems: vec![LlmpSharedMap::existing(
                     shmem_provider_bg
                         .shmem_from_description(tcp_out_shmem_description)
@@ -2812,6 +2843,8 @@ where
         F: FnMut(ClientId, Tag, Flags, &[u8]) -> Result<LlmpMsgHookResult, Error>,
     {
         let mut new_messages = false;
+        let mut client_handled_messages = 0;
+        //log::debug!("Broker: Handling messages for Client {:?}", client_id);
 
         // TODO: We could memcpy a range of pending messages, instead of one by one.
         loop {
@@ -2836,13 +2869,23 @@ where
                             // We don't do that in recv() to keep calls to `current_time` to a minimum.
                             self.llmp_clients[pos].last_msg_time = current_time();
                         }
+                        //log::debug!("Broker: No messages received from client {:?}", client_id);
                         return Ok(new_messages);
                     }
-                    Some(msg) => msg,
+                    Some(msg) => {
+                        client.messages_handled_count += 1;
+                        client_handled_messages = client.messages_handled_count;
+                        msg
+                    }
                 }
             };
             // We got a new message
             new_messages = true;
+
+            log::debug!("Broker: Received new message (id {:?}) from Client {:?}. Total handled messages: {}", 
+                (*msg).message_id, 
+                client_id,
+                client_handled_messages);
 
             match (*msg).tag {
                 // first, handle the special, llmp-internal messages
@@ -2850,6 +2893,7 @@ where
                     return Err(Error::unknown(format!("The broker was too slow to handle messages of client {client_id:?} in time, so it quit. Either the client sent messages too fast, or we (the broker) got stuck!")));
                 }
                 LLMP_TAG_NEW_SHM_CLIENT => {
+                    log::debug!("Broker handling LLMP_TAG_NEW_SHM_CLIENT");
                     /* This client informs us about yet another new client
                     add it to the list! Also, no need to forward this msg. */
                     let msg_buf_len_padded = (*msg).buf_len_padded;
@@ -2878,6 +2922,7 @@ where
                                 id: ClientId(0), // will be auto-filled
                                 current_recv_shmem: new_page,
                                 last_msg_recvd: ptr::null_mut(),
+                                messages_handled_count: 0,
                                 shmem_provider: self.shmem_provider.clone(),
                                 highest_msg_id: MessageId(0),
                                 // We don't know the last received time, just assume the current time.
@@ -2896,6 +2941,7 @@ where
                 }
                 // handle all other messages
                 _ => {
+                    log::debug!("Broker: client {:?} sent a message not specifically for us", client_id);
                     // The message is not specifically for use. Let the user handle it, then forward it to the clients, if necessary.
                     let mut should_forward_msg = true;
 
@@ -3081,6 +3127,7 @@ where
             sender: LlmpSender {
                 id: sender_id,
                 last_msg_sent: ptr::null_mut(),
+                messages_count: 0,
                 out_shmems: vec![LlmpSharedMap::new(sender_id, {
                     shmem_provider.new_shmem(LLMP_CFG_INITIAL_MAP_SIZE)?
                 })],
@@ -3095,6 +3142,7 @@ where
                 id: ClientId(0),
                 current_recv_shmem: initial_broker_shmem,
                 last_msg_recvd: ptr::null_mut(),
+                messages_handled_count: 0,
                 shmem_provider,
                 highest_msg_id: MessageId(0),
                 // We don't know the last received time, just assume the current time.
