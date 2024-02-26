@@ -240,7 +240,7 @@ where
 
         if self.spawn_broker {
             #[cfg(feature = "std")]
-            log::info!("I am broker!!.");
+            log::info!("PID {:?}: I am broker!!.", std::process::id());
 
             // TODO we don't want always a broker here, think about using different laucher process to spawn different configurations
             RestartingMgr::<MT, S, SP>::builder()
@@ -253,7 +253,7 @@ where
                 .configuration(self.configuration)
                 .serialize_state(self.serialize_state)
                 .build()
-                .launch()?;
+                .launch_with_client_timeout(Duration::from_secs(60*20))?;
 
             // Broker exited. kill all clients.
             for handle in &handles {
@@ -607,7 +607,7 @@ where
         }
 
         if self.spawn_broker {
-            log::info!("I am broker!!.");
+            log::info!("PID {:?}: I am broker!!.", std::process::id());
 
             // TODO we don't want always a broker here, think about using different laucher process to spawn different configurations
             RestartingMgr::<MT, S, SP>::builder()

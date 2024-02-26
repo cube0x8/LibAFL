@@ -185,7 +185,7 @@ where
         self.llmp.loop_with_timeouts(
             &mut |msg_or_timeout| {
                 if let Some((client_id, tag, _flags, msg)) = msg_or_timeout {
-                    log::debug!("Broker: Wasn't a reserved LLMP message...");
+                    log::debug!("Broker {}: Wasn't a reserved LLMP message...", std::process::id());
                     if tag == LLMP_TAG_EVENT_TO_BOTH {
                         log::debug!("Borker: Processing LLMP_TAG_EVENT_TO_BOTH from {:?}", client_id);
                         #[cfg(not(feature = "llmp_compression"))]
@@ -194,27 +194,27 @@ where
                         let compressed;
                         #[cfg(feature = "llmp_compression")]
                         let event_bytes = if _flags & LLMP_FLAG_COMPRESSED == LLMP_FLAG_COMPRESSED {
-                            log::debug!("Broker: Decompressing msg");
+                            log::debug!("Broker {:?}: Decompressing msg", std::process::id());
                             compressed = compressor.decompress(msg)?;
                             &compressed
                         } else {
-                            log::debug!("Broker: Msg not compressed");
+                            log::debug!("Broker {}: Msg not compressed", std::process::id());
                             msg
                         };
                         let event: Event<I> = postcard::from_bytes(event_bytes)?;
                         match Self::handle_in_broker(monitor, client_id, &event)? {
                             BrokerEventResult::Forward => {
-                                log::debug!("Broker: handled event for msg, returned Forward");
+                                log::debug!("Broker {:?}: handled event for msg, returned Forward", std::process::id());
                                 Ok(llmp::LlmpMsgHookResult::ForwardToClients)
                             }
                             BrokerEventResult::Handled => 
                                 {
-                                    log::debug!("Broker: handled event for msg, returned Handled");
+                                    log::debug!("Broker {:?}: handled event for msg, returned Handled", std::process::id());
                                     Ok(llmp::LlmpMsgHookResult::Handled)
                                 }
                         }
                     } else {
-                        log::debug!("Broker: Forwarding msg {:?} to clients", msg);
+                        log::debug!("Broker {:?}: Forwarding msg {:?} to clients", std::process::id(), msg);
                         Ok(llmp::LlmpMsgHookResult::ForwardToClients)
                     }
                 } else {
@@ -250,7 +250,7 @@ where
                 executions,
                 forward_id,
             } => {
-                log::debug!("Broker: Handling new testcase for client {:?}", client_id);
+                log::debug!("Broker {:?}: Handling new testcase for client {:?}", std::process::id(), client_id);
                 let id = if let Some(id) = *forward_id {
                     id
                 } else {
@@ -274,7 +274,7 @@ where
                 phantom: _,
             } => {
                 // TODO: The monitor buffer should be added on client add.
-                log::debug!("Broker: Handling new exec stat for client {:?}", client_id);
+                log::debug!("Broker {:?}: Handling new exec stat for client {:?}", std::process::id(), client_id);
                 monitor.client_stats_insert(client_id);
                 let client = monitor.client_stats_mut_for(client_id);
                 client.update_executions(*executions as u64, *time);
@@ -286,7 +286,7 @@ where
                 value,
                 phantom: _,
             } => {
-                log::debug!("Broker: Handling new use stats for client {:?}", client_id);
+                log::debug!("Broker {:?}: Handling new use stats for client {:?}", std::process::id(), client_id);
                 monitor.client_stats_insert(client_id);
                 let client = monitor.client_stats_mut_for(client_id);
                 client.update_user_stats(name.clone(), value.clone());
@@ -320,7 +320,7 @@ where
                 Ok(BrokerEventResult::Handled)
             }
             Event::Objective { objective_size } => {
-                log::debug!("Broker: Handling new objective for client {:?}", client_id);
+                log::debug!("Broker {:?}: Handling new objective for client {:?}", std::process::id(), client_id);
                 monitor.client_stats_insert(client_id);
                 let client = monitor.client_stats_mut_for(client_id);
                 client.update_objective_size(*objective_size as u64);
@@ -332,7 +332,7 @@ where
                 message,
                 phantom: _,
             } => {
-                log::debug!("Broker: Handling log for client {:?}", client_id);
+                log::debug!("Broker {:?}: Handling log for client {:?}", std::process::id(), client_id);
                 let (_, _) = (severity_level, message);
                 // TODO rely on Monitor
                 log::log!((*severity_level).into(), "{message}");

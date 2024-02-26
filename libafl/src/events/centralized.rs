@@ -661,7 +661,7 @@ where
                 executions,
                 forward_id,
             } => {
-                log::info!("Received new Testcase from {client_id:?} ({client_config:?}, forward {forward_id:?})");
+                //log::info!("Received new Testcase from {client_id:?} ({client_config:?}, forward {forward_id:?})");
 
                 let res =
                     if client_config.match_with(&self.configuration()) && observers_buf.is_some() {

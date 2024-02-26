@@ -820,7 +820,7 @@ impl LlmpPage {
         let receivers_joined_count = &mut self.receivers_joined_count;
         //receivers_joined_count.fetch_add(1, Ordering::Relaxed);
         receivers_joined_count.store(1, Ordering::Relaxed);
-        log::debug!("Broker: Joined page of client {:?}. It's now safe to unmap.", self.sender_id);
+        log::debug!("Broker {:?}: Joined page of client {:?}. It's now safe to unmap.", std::process::id(), self.sender_id);
     }
 
     #[inline]
@@ -828,7 +828,7 @@ impl LlmpPage {
         let receivers_joined_count = &mut self.receivers_joined_count;
         //receivers_joined_count.fetch_add(1, Ordering::Relaxed);
         receivers_joined_count.store(1, Ordering::Relaxed);
-        log::debug!("Broker: Left page of client {:?}. It's now safe to unmap.", self.sender_id);
+        log::debug!("Broker {:?}: Left page of client {:?}. It's now safe to unmap.", std::process::id(), self.sender_id);
     }
 }
 
@@ -1671,7 +1671,7 @@ where
                 }
                 LLMP_TAG_END_OF_PAGE => {
                     self.messages_handled_count += 1;
-                    log::debug!("Broker: Received end of page, allocating next. Total handled messages: {}", self.messages_handled_count);
+                    log::debug!("Broker {:?}: Received end of page, allocating next. Total handled messages: {}", std::process::id(), self.messages_handled_count);
                     self.messages_handled_count = 0;
                     // Handle end of page
                     assert!(
@@ -2279,6 +2279,7 @@ where
             panic!("Error sending msg: {e:?}");
         }
         self.llmp_out.last_msg_sent = out;
+        log::debug!("Broker {:?}: Forwarded msg {:?} in llmp_out", std::process::id(), (*out).message_id);
         Ok(())
     }
 
@@ -2305,7 +2306,9 @@ where
                         {
                             self.clients_to_remove.push(i);
                             #[cfg(feature = "llmp_debug")]
-                            log::error!("Client #{i} timed out. Removing.");
+                            log::error!("Broker {:?}: Client #{:?} timed out. Removing. (last_msg_time {:?}, current_time {:?}, client_timeout {:?})", 
+                                std::process::id(), client_id, last_msg_time, current_time, self.client_timeout);
+
                         }
                     }
                     new_messages = has_messages;
@@ -2317,7 +2320,7 @@ where
 
         // After brokering, remove all clients we don't want to keep.
         for i in self.clients_to_remove.iter().rev() {
-            log::debug!("Client #{i} disconnected.");
+            log::debug!("Brojer {:?}: Client #{i} disconnected.", std::process::id());
             self.llmp_clients.remove(*i);
         }
         self.clients_to_remove.clear();
@@ -2862,12 +2865,16 @@ where
                 let client = &mut self.llmp_clients[pos];
                 match client.recv()? {
                     None => {
-                        // We're done handling this client
+                        // We're done handling this 
                         #[cfg(feature = "std")]
                         if new_messages {
                             // set the recv time
                             // We don't do that in recv() to keep calls to `current_time` to a minimum.
                             self.llmp_clients[pos].last_msg_time = current_time();
+                            log::debug!("Broker {}: We're done handling {:?}. Updated last_msg_time to {:?}.", 
+                                std::process::id(),
+                                self.llmp_clients[pos].id, 
+                                self.llmp_clients[pos].last_msg_time);
                         }
                         //log::debug!("Broker: No messages received from client {:?}", client_id);
                         return Ok(new_messages);
@@ -2882,7 +2889,8 @@ where
             // We got a new message
             new_messages = true;
 
-            log::debug!("Broker: Received new message (id {:?}) from Client {:?}. Total handled messages: {}", 
+            log::debug!("Broker {:?}: Received new message (id {:?}) from Client {:?}. Total handled messages: {}.", 
+                std::process::id(),
                 (*msg).message_id, 
                 client_id,
                 client_handled_messages);
@@ -2941,7 +2949,7 @@ where
                 }
                 // handle all other messages
                 _ => {
-                    log::debug!("Broker: client {:?} sent a message not specifically for us", client_id);
+                    log::debug!("Broker {:?}: client {:?} sent a message not specifically for us", std::process::id(), client_id);
                     // The message is not specifically for use. Let the user handle it, then forward it to the clients, if necessary.
                     let mut should_forward_msg = true;
 
