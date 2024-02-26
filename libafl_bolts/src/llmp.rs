@@ -1613,33 +1613,39 @@ where
     /// Will *not* update `self.last_msg_time`.
     #[inline(never)]
     unsafe fn recv(&mut self) -> Result<Option<*mut LlmpMsg>, Error> {
-        /* DBG("recv %p %p\n", page, last_msg); */
         let page = self.current_recv_shmem.page_mut();
         let last_msg = self.last_msg_recvd;
+        log::debug!("Broker {}: Reading message from page {:?}. Last msg {:?} of {:?}", std::process::id(), page, last_msg, self.id);
 
         let (current_msg_id, loaded) =
             if !last_msg.is_null() && self.highest_msg_id > (*last_msg).message_id {
+                log::debug!("Broker {:?}: highest msg id {:?} > last msg id {:?}", std::process::id(), self.highest_msg_id, (*last_msg).message_id);
                 // read the msg_id from cache
                 (self.highest_msg_id, false)
             } else {
                 // read the msg_id from shared map
                 let current_msg_id = (*page).current_msg_id.load(Ordering::Relaxed);
                 self.highest_msg_id = MessageId(current_msg_id);
+                log::debug!("Broker {}: read current message id {:?} from map", std::process::id(), current_msg_id);
                 (MessageId(current_msg_id), true)
             };
 
         // Read the message from the page
         let ret = if current_msg_id.0 == 0 {
+            log::debug!("Broker {}: current msg id == 0. No messages yet", std::process::id());
             /* No messages yet */
             None
         } else if last_msg.is_null() {
             /* We never read a message from this queue. Return first. */
+            log::debug!("Broker {}: we never read a message from this queue. Returning pointer to first message", std::process::id());
             fence(Ordering::Acquire);
             Some((*page).messages.as_mut_ptr())
         } else if (*last_msg).message_id == current_msg_id {
+            log::debug!("Broker {}: last_msg.message_id == current_msg_id ({:?} == {:?}). No new message", std::process::id(), (*last_msg).message_id, current_msg_id);
             /* Oops! No new message! */
             None
         } else {
+            log::debug!("Broker {}: We read a higher message id from this page", std::process::id());
             if loaded {
                 // we read a higher id from this page, fetch.
                 fence(Ordering::Acquire);
@@ -1657,6 +1663,7 @@ where
             if !(*msg).in_shmem(&mut self.current_recv_shmem) {
                 return Err(Error::illegal_state("Unexpected message in map (out of map bounds) - buggy client or tampered shared map detected!"));
             }
+            log::debug!("Broker {}: message with id {:?} from {:?} read from the map.", std::process::id(), (*msg).message_id, self.id);
             // Handle special, LLMP internal, messages.
             match (*msg).tag {
                 LLMP_TAG_UNSET => panic!(
@@ -2320,7 +2327,8 @@ where
 
         // After brokering, remove all clients we don't want to keep.
         for i in self.clients_to_remove.iter().rev() {
-            log::debug!("Brojer {:?}: Client #{i} disconnected.", std::process::id());
+            let client_id = self.llmp_clients[*i].id;
+            log::debug!("Broker {:?}: {:?} disconnected.", std::process::id(), client_id);
             self.llmp_clients.remove(*i);
         }
         self.clients_to_remove.clear();
@@ -2847,7 +2855,7 @@ where
     {
         let mut new_messages = false;
         let mut client_handled_messages = 0;
-        //log::debug!("Broker: Handling messages for Client {:?}", client_id);
+        log::debug!("Broker {:?} going to read messages for {:?}", std::process::id(), client_id);
 
         // TODO: We could memcpy a range of pending messages, instead of one by one.
         loop {

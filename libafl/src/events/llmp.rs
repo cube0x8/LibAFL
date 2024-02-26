@@ -179,42 +179,43 @@ where
     /// Run in the broker until all clients exit
     #[cfg(feature = "llmp_broker_timeouts")]
     pub fn broker_loop(&mut self) -> Result<(), Error> {
+        log::debug!("Main broker {}: main broker loop started", std::process::id());
         let monitor = &mut self.monitor;
         #[cfg(feature = "llmp_compression")]
         let compressor = &self.compressor;
         self.llmp.loop_with_timeouts(
             &mut |msg_or_timeout| {
                 if let Some((client_id, tag, _flags, msg)) = msg_or_timeout {
-                    log::debug!("Broker {}: Wasn't a reserved LLMP message...", std::process::id());
+                    log::debug!("Main Broker {}: Wasn't a reserved LLMP message...", std::process::id());
                     if tag == LLMP_TAG_EVENT_TO_BOTH {
-                        log::debug!("Borker: Processing LLMP_TAG_EVENT_TO_BOTH from {:?}", client_id);
+                        log::debug!("Main Borker: Processing LLMP_TAG_EVENT_TO_BOTH from {:?}", client_id);
                         #[cfg(not(feature = "llmp_compression"))]
                         let event_bytes = msg;
                         #[cfg(feature = "llmp_compression")]
                         let compressed;
                         #[cfg(feature = "llmp_compression")]
                         let event_bytes = if _flags & LLMP_FLAG_COMPRESSED == LLMP_FLAG_COMPRESSED {
-                            log::debug!("Broker {:?}: Decompressing msg", std::process::id());
+                            log::debug!("Main Broker {:?}: Decompressing msg", std::process::id());
                             compressed = compressor.decompress(msg)?;
                             &compressed
                         } else {
-                            log::debug!("Broker {}: Msg not compressed", std::process::id());
+                            log::debug!("Main Broker {}: Msg not compressed", std::process::id());
                             msg
                         };
                         let event: Event<I> = postcard::from_bytes(event_bytes)?;
                         match Self::handle_in_broker(monitor, client_id, &event)? {
                             BrokerEventResult::Forward => {
-                                log::debug!("Broker {:?}: handled event for msg, returned Forward", std::process::id());
+                                log::debug!("Main Broker {:?}: Forwarding", std::process::id());
                                 Ok(llmp::LlmpMsgHookResult::ForwardToClients)
                             }
                             BrokerEventResult::Handled => 
                                 {
-                                    log::debug!("Broker {:?}: handled event for msg, returned Handled", std::process::id());
+                                    log::debug!("Main Broker {:?}: handled event for msg", std::process::id());
                                     Ok(llmp::LlmpMsgHookResult::Handled)
                                 }
                         }
                     } else {
-                        log::debug!("Broker {:?}: Forwarding msg {:?} to clients", std::process::id(), msg);
+                        log::debug!("Main Broker {:?}: Forwarding msg {:?} to clients", std::process::id(), msg);
                         Ok(llmp::LlmpMsgHookResult::ForwardToClients)
                     }
                 } else {

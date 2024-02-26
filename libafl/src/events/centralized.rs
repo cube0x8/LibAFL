@@ -150,12 +150,14 @@ where
     /// Run in the broker until all clients exit
     #[cfg(feature = "llmp_broker_timeouts")]
     pub fn broker_loop(&mut self) -> Result<(), Error> {
+        log::debug!("CentralizedBroker {} entering broker_loop", std::process::id());
         #[cfg(feature = "llmp_compression")]
         let compressor = &self.compressor;
         self.llmp.loop_with_timeouts(
             &mut |msg_or_timeout| {
                 if let Some((client_id, tag, _flags, msg)) = msg_or_timeout {
                     if tag == _LLMP_TAG_TO_MAIN {
+                        log::debug!("Centralized Broker {:?}: received msg with tag LLMP_TAG_TO_MAIN from {:?}", std::process::id(), client_id);
                         #[cfg(not(feature = "llmp_compression"))]
                         let event_bytes = msg;
                         #[cfg(feature = "llmp_compression")]
@@ -207,8 +209,15 @@ where
                 time: _,
                 executions: _,
                 forward_id: _,
-            } => Ok(BrokerEventResult::Forward),
-            _ => Ok(BrokerEventResult::Handled),
+            } => { 
+                log::debug!("Centralized broker {:?}: Received new testcase from {:?}", std::process::id(), _client_id);
+                Ok(BrokerEventResult::Forward)
+            }
+            _ => 
+            {
+                log::debug!("Centralized broker {}: didn't receive a testcase from {:?}. Handled!", std::process::id(), _client_id);
+                Ok(BrokerEventResult::Handled)
+            },
         }
     }
 }
