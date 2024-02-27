@@ -1315,6 +1315,7 @@ where
                             handle.status()
                         }
                         ForkResult::Child => {
+                            log::debug!("Spawned child with id {} and PID {}", ctr, std::process::id());
                             self.shmem_provider.post_fork(true)?;
                             break (staterestorer, self.shmem_provider.clone(), core_id);
                         }
@@ -1385,7 +1386,7 @@ where
                     ),
                 )
             } else {
-                log::info!("First run. Let's set it all up");
+                log::info!("PID {}: First run. Let's set it all up", std::process::id());
                 // Mgr to send and receive msgs from/to all other fuzzer instances
                 let mgr = LlmpEventManager::<S, SP>::existing_client_from_env(
                     new_shmem_provider,

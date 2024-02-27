@@ -86,7 +86,7 @@ use std::{
     sync::mpsc::channel,
     thread,
 };
-
+use crate::current_nanos;
 #[cfg(all(debug_assertions, feature = "llmp_debug", feature = "std"))]
 use backtrace::Backtrace;
 #[cfg(all(unix, feature = "std"))]
@@ -1240,6 +1240,13 @@ where
             .current_msg_id
             .store((*msg).message_id.0, Ordering::Release);
 
+        log::debug!("PID {}: Client {:?} stored current_msg_id {:?} for page {:#x?}", 
+            std::process::id(), 
+            self.id, 
+            (*page).current_msg_id.load(Ordering::Relaxed),
+            page
+        );
+
         self.last_msg_sent = msg;
         self.has_unsent_message = false;
         Ok(())
@@ -1593,6 +1600,8 @@ where
             None => ptr::null_mut(),
         };
 
+        log::debug!("PID {}: returning new LlmpReceiver", std::process::id());
+
         Ok(Self {
             id: ClientId(0),
             current_recv_shmem,
@@ -1623,10 +1632,15 @@ where
                 // read the msg_id from cache
                 (self.highest_msg_id, false)
             } else {
-                // read the msg_id from shared map
                 let current_msg_id = (*page).current_msg_id.load(Ordering::Relaxed);
                 self.highest_msg_id = MessageId(current_msg_id);
-                log::debug!("Broker {}: read current message id {:?} from map", std::process::id(), current_msg_id);
+                log::debug!("Broker {}: read current message id {:?} from map - nanos {:?} - current_msg_id ptr {:#x?}", 
+                    std::process::id(), 
+                    current_msg_id, 
+                    current_nanos(),
+                    (*page).current_msg_id.as_ptr());
+                let current_msg_id_2 = (*page).current_msg_id.load(Ordering::Relaxed);
+                log::debug!("Broker {}: read current message id {:?} from map", std::process::id(), current_msg_id_2);
                 (MessageId(current_msg_id), true)
             };
 

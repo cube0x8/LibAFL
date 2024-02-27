@@ -592,6 +592,10 @@ where
                             .serialize_state(self.serialize_state)
                             .build()
                             .launch()?;
+                        
+                        if index == 1 {
+                            log::debug!("PID {}: index == 1. Spawning main evaluator...", std::process::id());
+                        }
 
                         let c_mgr = CentralizedEventManager::on_port(
                             mgr,
