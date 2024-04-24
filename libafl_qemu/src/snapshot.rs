@@ -1,6 +1,7 @@
 use std::{
     cell::UnsafeCell,
     collections::{HashMap, HashSet},
+    mem::MaybeUninit,
     sync::Mutex,
 };
 
@@ -37,7 +38,7 @@ pub const SNAPSHOT_PAGE_MASK: GuestAddr = !(SNAPSHOT_PAGE_SIZE as GuestAddr - 1)
 
 pub type StopExecutionCallback = Box<dyn FnMut(&mut QemuSnapshotHelper, &Qemu)>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SnapshotPageInfo {
     pub addr: GuestAddr,
     pub perms: MmapPerms,
