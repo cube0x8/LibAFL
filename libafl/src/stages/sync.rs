@@ -87,6 +87,7 @@ where
         state: &mut Z::State,
         manager: &mut EM,
     ) -> Result<(), Error> {
+        log::debug!("Syncing from disk. Left to sync: {:?}", self.to_sync.len());
         let last = state
             .metadata_map()
             .get::<SyncFromDiskMetadata>()
@@ -94,9 +95,7 @@ where
         let path = self.sync_dir.clone();
         // Tracks new files to sync based on `last_time`. Files are added to `self.to_sync` and
         // removed before evaluation to ensure each file is processed exactly once.
-        if let Some(max_time) =
-            self.load_from_directory(&path, &last)?
-        {
+        if let Some(max_time) = self.load_from_directory(&path, &last)? {
             if last.is_none() {
                 state
                     .metadata_map_mut()
@@ -112,6 +111,7 @@ where
             // By keeping track of these files, we ensure that no file is missed during synchronization,
             // even in the event of a target restart.
             let to_sync = self.to_sync.clone();
+            let count = 0;
             for path in to_sync {
                 let input = (self.load_callback)(fuzzer, state, &path)?;
                 // Removing each path from the `to_sync` HashSet after processing
@@ -119,6 +119,7 @@ where
                 // avoid potential infinite loops that may occur if a file is an objective, as SyncFromDiskStage can safely
                 // resume syncing from the remaining files.
                 self.to_sync.remove(&path);
+                log::debug!("Removed file from to_sync: {:?} - count {:?}", path, count);
                 fuzzer.evaluate_input(state, executor, manager, input)?;
             }
         }
@@ -191,14 +192,14 @@ where
                     self.to_sync.insert(path.clone());
                 }
             } else if attr.is_dir() {
-                let dir_max_time =
-                    self.load_from_directory(&path, last)?;
+                let dir_max_time = self.load_from_directory(&path, last)?;
                 if let Some(time) = dir_max_time {
                     max_time = Some(max_time.map_or(time, |t: SystemTime| t.max(time)));
                 }
             }
         }
 
+        log::debug!("Number of loaded files {:?}", self.to_sync.len());
         Ok(max_time)
     }
 }
