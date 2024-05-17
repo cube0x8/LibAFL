@@ -387,7 +387,7 @@ where
             allowed_paging_ids.insert(current_paging_id);
 
             let paging_filter =
-                HasInstrumentationFilter::<QemuInstrumentationPagingFilter, S>::filter_mut(
+                HasInstrumentationFilter::<QemuInstrumentationPagingFilter>::filter_mut(
                     qemu_helpers,
                 );
 
@@ -619,9 +619,7 @@ where
         let qemu_helpers = qemu_executor_state.hooks_mut().helpers_mut();
 
         let paging_filter =
-            HasInstrumentationFilter::<QemuInstrumentationPagingFilter, S>::filter_mut(
-                qemu_helpers,
-            );
+            HasInstrumentationFilter::<QemuInstrumentationPagingFilter>::filter_mut(qemu_helpers);
 
         *paging_filter = self.filter.clone();
 
@@ -651,7 +649,7 @@ where
         let qemu_helpers = qemu_executor_state.hooks_mut().helpers_mut();
 
         let addr_range_filter =
-            HasInstrumentationFilter::<QemuInstrumentationAddressRangeFilter, S>::filter_mut(
+            HasInstrumentationFilter::<QemuInstrumentationAddressRangeFilter>::filter_mut(
                 qemu_helpers,
             );
 
