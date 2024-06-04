@@ -152,7 +152,7 @@ where
                     Ok(llmp::LlmpMsgHookResult::Handled)
                 }
             },
-            Duration::from_secs(30),
+            Duration::from_secs(60*60),
             Some(Duration::from_millis(5)),
         );
 
