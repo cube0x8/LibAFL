@@ -122,6 +122,7 @@ where
             String::new()
         };
         let head = format!("{event_msg}{pad} {sender}");
+        let prometheus_head = "[Prometheus]";
 
         let corpus_size = self.corpus_size();
         self.global_corpus
@@ -168,8 +169,9 @@ where
 
         // display aggregated stats
         let mut global_fmt = format!(
-            "[Prometheus] [{}] run time: {}, clients: {}, corpus: {}, objectives: {}, executions: {}, exec/sec: {}",
-            "GLOBAL",
+            "{} [{}] (GLOBAL) run time: {}, clients: {}, corpus: {}, objectives: {}, executions: {}, exec/sec: {}",
+            prometheus_head,
+            head,
             format_duration_hms(&(current_time() - self.start_time)),
             self.client_stats_count(),
             self.corpus_size(),
@@ -220,9 +222,9 @@ where
         let cur_time = current_time();
         let exec_sec = cur_client.execs_per_sec_pretty(cur_time);
         
-        let pad = " ".repeat(head.len());
+        let pad = " ".repeat(prometheus_head.len());
         let mut client_fmt = format!(
-            " {} (CLIENT) corpus: {}, objectives: {}, executions: {}, exec/sec: {}",
+            "{} (CLIENT) corpus: {}, objectives: {}, executions: {}, exec/sec: {}",
             pad, cur_client.corpus_size, cur_client.objective_size, cur_client.executions, exec_sec
         );
 
