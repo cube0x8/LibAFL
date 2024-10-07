@@ -182,7 +182,23 @@ where
                 UserStatsValue::Number(n) => *n as f64,
                 UserStatsValue::Float(f) => *f,
                 UserStatsValue::String(_s) => 0.0,
-                UserStatsValue::Ratio(a, b) => (*a as f64 / *b as f64) * 100.0,
+                UserStatsValue::Ratio(a, b) => {
+                    if key == "edges" {
+                        self.custom_stat
+                            .get_or_create(&Labels {
+                                client: sender_id.0,
+                                stat: Cow::from("edges_total"),
+                            })
+                            .set(*b as f64);
+                        self.custom_stat
+                            .get_or_create(&Labels {
+                                client: sender_id.0,
+                                stat: Cow::from("edges_hit"),
+                            })
+                            .set(*a as f64);
+                    }
+                    (*a as f64 / *b as f64) * 100.0
+                },
                 UserStatsValue::Percent(p) => *p * 100.0,
             };
             self.custom_stat
