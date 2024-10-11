@@ -195,6 +195,7 @@ where
     }
 
     fn send_exiting(&mut self) -> Result<(), Error> {
+        log::debug!("[BUG] PID {:?} Sending exiting", std::process::id());
         self.staterestorer.send_exiting();
         // Also inform the broker that we are about to exit.
         // This way, the broker can clean up the pages, and eventually exit.
@@ -313,7 +314,7 @@ where
 
     /// Save LLMP state and empty state in staterestorer
     pub fn intermediate_save(&mut self) -> Result<(), Error> {
-        log::debug!("Intermediate save");
+        log::debug!("[BUG] PID {:?} Intermediate save", std::process::id());
         // First, reset the page to 0 so the next iteration can read read from the beginning of this page
         if self.save_state.oom_safe() {
             self.staterestorer.reset();
@@ -596,7 +597,7 @@ where
                         }
                     }
                 };
-
+                log::debug!("[BUG] PID {:?} Child status: {child_status}", std::process::id());
                 // If this guy wants to fork, then ignore sigint
                 #[cfg(any(windows, not(feature = "fork")))]
                 unsafe {
@@ -628,6 +629,7 @@ where
 
                 #[allow(clippy::manual_assert)]
                 if !staterestorer.has_content() && !self.serialize_state.oom_safe() {
+                    log::debug!("[BUG] PID {:?} No content in staterestorer, but not oom safe. Exiting.", std::process::id());
                     if let Err(err) = mgr.detach_from_broker(self.broker_port) {
                         log::error!("Failed to detach from broker: {err}");
                     }
@@ -668,6 +670,7 @@ where
         // If we're restarting, deserialize the old state.
         let (state, mut mgr) =
             if let Some((state_opt, mgr_description)) = staterestorer.restore()? {
+                log::info!("[BUG] PID {:?} Restoring state from previous run", std::process::id());
                 let llmp_mgr = LlmpEventManager::builder()
                     .hooks(self.hooks)
                     .build_existing_client_from_description(
@@ -685,7 +688,7 @@ where
                     ),
                 )
             } else {
-                log::info!("First run. Let's set it all up");
+                log::info!("PID {:?} First run. Let's set it all up", std::process::id());
                 // Mgr to send and receive msgs from/to all other fuzzer instances
                 let mgr = LlmpEventManager::builder()
                     .hooks(self.hooks)

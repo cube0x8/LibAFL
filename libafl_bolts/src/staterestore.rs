@@ -116,11 +116,11 @@ where
             ));
         }
 
-        log::debug!("PID: {:?} Saving state ", std::process::id());
+        log::debug!("[BUG] PID: {:?} Saving state ", std::process::id());
         let serialized = postcard::to_allocvec(state)?;
 
         if size_of::<StateShMemContent>() + serialized.len() > self.shmem.len() {
-            log::debug!("PID: {:?} State is too large for shared map, writing to disk.", std::process::id());
+            log::debug!("[BUG] PID: {:?} State is too large for shared map, writing to disk.", std::process::id());
             // generate a filename
             let mut hasher = RandomState::with_seeds(0, 0, 0, 0).build_hasher();
             // Using the last few k as randomness for a filename, hoping it's unique.
@@ -129,7 +129,7 @@ where
             let filename = format!("{:016x}.libafl_state", hasher.finish());
             let tmpfile = temp_dir().join(&filename);
             File::create(tmpfile)?.write_all(&serialized)?;
-            log::debug!("PID: {:?} Wrote state to file {:?}", std::process::id(), &filename);
+            log::debug!("[BUG] PID: {:?} Wrote state to file {:?}", std::process::id(), &filename);
 
             // write the filename to shmem
             let filename_buf = postcard::to_allocvec(&filename)?;
@@ -146,7 +146,7 @@ where
             }
 
             log::debug!(
-                "Storing {} bytes to tmpfile {} (larger than map of {} bytes)",
+                "[BUG] Storing {} bytes to tmpfile {} (larger than map of {} bytes)",
                 serialized.len(),
                 &filename,
                 self.shmem.len()
@@ -163,7 +163,7 @@ where
             shmem_content.buf_len = len;
             shmem_content.is_disk = true;
         } else {
-            log::debug!("PID: {:?} State fits into shared map, writing directly.", std::process::id());
+            log::debug!("[BUG] PID: {:?} State fits into shared map, writing directly.", std::process::id());
             // write to shmem directly
             let len = serialized.len();
             let shmem_content = self.content_mut();
@@ -191,6 +191,7 @@ where
     /// When called from a child, informs the restarter/parent process
     /// that it should no longer respawn the child.
     pub fn send_exiting(&mut self) {
+        log::debug!("[BUG] PID: {:?} Sending exiting signal", std::process::id());
         self.reset();
 
         let len = EXITING_MAGIC.len();
@@ -248,6 +249,7 @@ where
     where
         S: DeserializeOwned,
     {
+        log::debug!("[BUG] PID: {:?} Restoring state", std::process::id());
         if !self.has_content() {
             return Ok(None);
         }

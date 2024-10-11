@@ -294,7 +294,7 @@ where
 
         if self.spawn_broker {
             #[cfg(feature = "std")]
-            log::info!("I am broker!!.");
+            log::info!("[BUG] PID {:?} I am broker!!.", std::process::id());
 
             // TODO we don't want always a broker here, think about using different laucher process to spawn different configurations
             let builder = RestartingMgr::<EMH, MT, S, SP>::builder()
@@ -445,7 +445,7 @@ where
 
         if self.spawn_broker {
             #[cfg(feature = "std")]
-            log::info!("I am broker!!.");
+            log::info!("[BUG] PID {:?} I am broker!!.", std::process::id());
 
             let builder = RestartingMgr::<EMH, MT, S, SP>::builder()
                 .shmem_provider(self.shmem_provider.clone())
@@ -794,7 +794,7 @@ where
 
         // If we should add another broker, add it to other brokers.
         if self.spawn_broker {
-            log::info!("I am broker!!.");
+            log::info!("[BUG] PID {:?} I am broker!!.", std::process::id());
 
             #[cfg(not(feature = "multi_machine"))]
             let llmp_hook =
