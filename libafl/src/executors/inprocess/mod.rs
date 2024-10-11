@@ -471,6 +471,7 @@ pub fn run_observers_and_save_state<E, EM, OF, Z>(
             .solutions_mut()
             .add(new_testcase)
             .expect("In run_observers_and_save_state solutions failure.");
+        log::debug!("[BUG] PID {:?} Found a new interesting testcase! Going to fire and save state", std::process::id());
         event_mgr
             .fire(
                 state,

@@ -149,7 +149,7 @@ pub mod unix_signal_handler {
         let fuzzer = data.fuzzer_mut::<Z>();
         let input = data.take_current_input::<<E::State as UsesInput>::Input>();
 
-        log::error!("Timeout in fuzz run.");
+        log::error!("[BUG] PID {:?} Timeout in fuzz run.", std::process::id());
 
         run_observers_and_save_state::<E, EM, OF, Z>(
             executor,

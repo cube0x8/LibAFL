@@ -143,6 +143,7 @@ where
     ) -> Result<(), Error> {
         // Check if we are going to crash in the event, in which case we store our current state for the next runner
         self.llmp_mgr.fire(state, event)?;
+        log::debug!("[BUG] PID {:?} Firing event and going to intermediate store", std::process::id());
         self.intermediate_save()?;
         Ok(())
     }
@@ -710,6 +711,7 @@ where
             };
         // We reset the staterestorer, the next staterestorer and receiver (after crash) will reuse the page from the initial message.
         if self.serialize_state.oom_safe() {
+            log::debug!("[BUG] PID {:?} Resetting staterestorer", std::process::id());
             mgr.intermediate_save()?;
         } else {
             mgr.staterestorer.reset();

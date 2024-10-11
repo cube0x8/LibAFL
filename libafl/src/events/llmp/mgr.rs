@@ -622,7 +622,7 @@ where
                 msg
             };
             let event: Event<S::Input> = postcard::from_bytes(event_bytes)?;
-            log::debug!("Received event in normal llmp {}", event.name_detailed());
+            log::debug!("[BUG] PID {:?} Received event in normal llmp {}", std::process::id(), event.name_detailed());
             self.handle_in_client(fuzzer, executor, state, client_id, event)?;
             count += 1;
         }
