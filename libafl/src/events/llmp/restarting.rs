@@ -175,6 +175,7 @@ where
 
     /// Reset the single page (we reuse it over and over from pos 0), then send the current state to the next runner.
     fn on_restart(&mut self, state: &mut S) -> Result<(), Error> {
+        log::debug!("Restarting the fuzzer");
         state.on_restart()?;
 
         // First, reset the page to 0 so the next iteration can read from the beginning of this page
@@ -312,6 +313,7 @@ where
 
     /// Save LLMP state and empty state in staterestorer
     pub fn intermediate_save(&mut self) -> Result<(), Error> {
+        log::debug!("Intermediate save");
         // First, reset the page to 0 so the next iteration can read read from the beginning of this page
         if self.save_state.oom_safe() {
             self.staterestorer.reset();
