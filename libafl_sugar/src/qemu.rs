@@ -30,6 +30,7 @@ use libafl::{
 };
 use libafl_bolts::{
     core_affinity::Cores,
+    nonzero,
     ownedref::OwnedMutSlice,
     rands::StdRand,
     shmem::{ShMemProvider, StdShMemProvider},
@@ -39,11 +40,8 @@ use libafl_bolts::{
 #[cfg(not(any(feature = "mips", feature = "hexagon")))]
 use libafl_qemu::modules::CmpLogModule;
 pub use libafl_qemu::qemu::Qemu;
-use libafl_qemu::{
-    modules::edges::{self, EdgeCoverageModule},
-    Emulator, QemuExecutor,
-};
-use libafl_targets::{edges_map_mut_ptr, CmpLogObserver};
+use libafl_qemu::{modules::edges::StdEdgeCoverageModule, Emulator, QemuExecutor};
+use libafl_targets::{edges_map_mut_ptr, CmpLogObserver, EDGES_MAP_DEFAULT_SIZE, MAX_EDGES_FOUND};
 use typed_builder::TypedBuilder;
 
 use crate::{CORPUS_CACHE_SIZE, DEFAULT_TIMEOUT_SECS};
@@ -89,7 +87,7 @@ where
     iterations: Option<u64>,
 }
 
-impl<'a, H> Debug for QemuBytesCoverageSugar<'a, H>
+impl<H> Debug for QemuBytesCoverageSugar<'_, H>
 where
     H: FnMut(&[u8]),
 {
@@ -117,7 +115,7 @@ where
     }
 }
 
-impl<'a, H> QemuBytesCoverageSugar<'a, H>
+impl<H> QemuBytesCoverageSugar<'_, H>
 where
     H: FnMut(&[u8]),
 {
@@ -160,14 +158,11 @@ where
             let time_observer = time_observer.clone();
 
             // Create an observation channel using the coverage map
-            let edges_observer = unsafe {
+            let mut edges_observer = unsafe {
                 HitcountsMapObserver::new(VariableMapObserver::from_mut_slice(
                     "edges",
-                    OwnedMutSlice::from_raw_parts_mut(
-                        edges_map_mut_ptr(),
-                        edges::EDGES_MAP_SIZE_IN_USE,
-                    ),
-                    addr_of_mut!(edges::MAX_EDGES_FOUND),
+                    OwnedMutSlice::from_raw_parts_mut(edges_map_mut_ptr(), EDGES_MAP_DEFAULT_SIZE),
+                    addr_of_mut!(MAX_EDGES_FOUND),
                 ))
                 .track_indices()
             };
@@ -222,15 +217,26 @@ where
                 let modules = {
                     #[cfg(not(any(feature = "mips", feature = "hexagon")))]
                     {
-                        tuple_list!(EdgeCoverageModule::default(), CmpLogModule::default(),)
+                        tuple_list!(
+                            StdEdgeCoverageModule::builder()
+                                .map_observer(edges_observer.as_mut())
+                                .build()
+                                .unwrap(),
+                            CmpLogModule::default(),
+                        )
                     }
                     #[cfg(any(feature = "mips", feature = "hexagon"))]
                     {
-                        tuple_list!(EdgeCoverageModule::default())
+                        tuple_list!(StdEdgeCoverageModule::builder()
+                            .map_observer(edges_observer.as_mut())
+                            .build()
+                            .unwrap())
                     }
                 };
 
-                let mut harness = |_emulator: &mut Emulator<_, _, _, _, _>, input: &BytesInput| {
+                let mut harness = |_emulator: &mut Emulator<_, _, _, _, _>,
+                                   _state: &mut _,
+                                   input: &BytesInput| {
                     let target = input.target_bytes();
                     let buf = target.as_slice();
                     harness_bytes(buf);
@@ -254,7 +260,7 @@ where
                 if state.must_load_initial_inputs() {
                     if self.input_dirs.is_empty() {
                         // Generator of printable bytearrays of max size 32
-                        let mut generator = RandBytesGenerator::new(32);
+                        let mut generator = RandBytesGenerator::new(nonzero!(32));
 
                         // Generate 8 initial inputs
                         state
@@ -340,9 +346,14 @@ where
                     }
                 }
             } else {
-                let modules = tuple_list!(EdgeCoverageModule::default());
+                let modules = tuple_list!(StdEdgeCoverageModule::builder()
+                    .map_observer(edges_observer.as_mut())
+                    .build()
+                    .unwrap());
 
-                let mut harness = |_emulator: &mut Emulator<_, _, _, _, _>, input: &BytesInput| {
+                let mut harness = |_emulator: &mut Emulator<_, _, _, _, _>,
+                                   _state: &mut _,
+                                   input: &BytesInput| {
                     let target = input.target_bytes();
                     let buf = target.as_slice();
                     harness_bytes(buf);
@@ -365,7 +376,7 @@ where
                 if state.must_load_initial_inputs() {
                     if self.input_dirs.is_empty() {
                         // Generator of printable bytearrays of max size 32
-                        let mut generator = RandBytesGenerator::new(32);
+                        let mut generator = RandBytesGenerator::new(nonzero!(32));
 
                         // Generate 8 initial inputs
                         state

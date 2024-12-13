@@ -242,7 +242,7 @@ pub mod serdeany_registry {
         /// # Safety
         /// This may never be called concurrently or at the same time as `register`.
         /// It dereferences the `REGISTRY` hashmap and adds the given type to it.
-        pub fn finalize() {
+        pub unsafe fn finalize() {
             unsafe {
                 (*addr_of_mut!(REGISTRY)).finalize();
             }
@@ -265,22 +265,6 @@ pub mod serdeany_registry {
             postcard::from_bytes(&serialized).unwrap()
         }
     }
-
-    /*
-    #[cfg(feature = "anymap_debug")]
-    impl fmt::Debug for SerdeAnyMap {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            let json = serde_json::to_string(&self);
-            write!(f, "SerdeAnyMap: [{:?}]", json)
-        }
-    }
-
-    #[cfg(not(feature = "anymap_debug"))]
-    impl fmt::Debug for SerdeAnyMap {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            write!(f, "SerdeAnymap with {} elements", self.len())
-        }
-    }*/
 
     #[allow(unused_qualifications)]
     impl SerdeAnyMap {

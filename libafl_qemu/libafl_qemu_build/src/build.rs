@@ -11,7 +11,7 @@ use crate::cargo_add_rpath;
 
 pub const QEMU_URL: &str = "https://github.com/AFLplusplus/qemu-libafl-bridge";
 pub const QEMU_DIRNAME: &str = "qemu-libafl-bridge";
-pub const QEMU_REVISION: &str = "ee43af7f80d1117857e58b0b7ef556652d5893d5";
+pub const QEMU_REVISION: &str = "b01a0bc334cf11bfc5e8f121d9520ef7f47dbcd1";
 
 #[allow(clippy::module_name_repetitions)]
 pub struct BuildResult {
@@ -90,8 +90,11 @@ fn configure_qemu(
         .arg(format!("--cxx={}", linker_interceptor_plus_plus.display()))
         .arg("--as-shared-lib")
         .arg(format!("--target-list={cpu_target}-{target_suffix}"))
+        .arg("--disable-bsd-user")
         // .arg("--disable-capstone")
-        .arg("--disable-bsd-user");
+        .arg("--disable-docs")
+        .arg("--disable-tests")
+        .arg("--disable-tools");
 
     if cfg!(feature = "paranoid_debug") {
         cmd.arg("--enable-debug")
@@ -137,13 +140,14 @@ fn configure_qemu(
         .arg("--disable-gio")
         .arg("--disable-glusterfs")
         .arg("--disable-gnutls")
-        .arg("--disable-gtk")
-        .arg("--disable-guest-agent")
-        .arg("--disable-guest-agent-msi")
+        // .arg("--disable-gtk")
+        // .arg("--disable-guest-agent")
+        // .arg("--disable-guest-agent-msi")
         .arg("--disable-hvf")
         .arg("--disable-iconv")
         .arg("--disable-jack")
         .arg("--disable-keyring")
+        // .arg("--disable-kvm")
         .arg("--disable-libdaxctl")
         .arg("--disable-libiscsi")
         .arg("--disable-libnfs")
@@ -154,7 +158,7 @@ fn configure_qemu(
         .arg("--disable-linux-aio")
         .arg("--disable-linux-io-uring")
         .arg("--disable-linux-user")
-        .arg("--disable-live-block-migration")
+        // .arg("--disable-live-block-migration")
         .arg("--disable-lzfse")
         .arg("--disable-lzo")
         .arg("--disable-l2tpv3")
@@ -170,7 +174,7 @@ fn configure_qemu(
         .arg("--disable-pa")
         .arg("--disable-parallels")
         .arg("--disable-png")
-        .arg("--disable-pvrdma")
+        // .arg("--disable-pvrdma")
         .arg("--disable-qcow1")
         .arg("--disable-qed")
         .arg("--disable-qga-vss")
@@ -213,8 +217,7 @@ fn configure_qemu(
         .arg("--disable-xen")
         .arg("--disable-xen-pci-passthrough")
         .arg("--disable-xkbcommon")
-        .arg("--disable-zstd")
-        .arg("--disable-tests");
+        .arg("--disable-zstd");
     }
 
     cmd
