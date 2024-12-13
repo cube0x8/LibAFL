@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, mem::MaybeUninit, ptr::addr_of_mut, sync::Mutex};
+use std::{cell::UnsafeCell, mem::MaybeUninit, sync::Mutex};
 
 use hashbrown::{HashMap, HashSet};
 use libafl::inputs::UsesInput;
@@ -257,7 +257,7 @@ impl SnapshotModule {
 
     pub fn access(&mut self, addr: GuestAddr, size: usize) {
         // ASSUMPTION: the access can only cross 2 pages
-        debug_assert!(size > 0 && size < SNAPSHOT_PAGE_SIZE);
+        debug_assert!(size > 0 && size <= SNAPSHOT_PAGE_SIZE);
         let page = addr & SNAPSHOT_PAGE_MASK;
         self.page_access(page);
         let second_page = (addr + size as GuestAddr - 1) & SNAPSHOT_PAGE_MASK;
@@ -675,7 +675,7 @@ where
 {
     type ModuleAddressFilter = NopAddressFilter;
 
-    fn init_module<ET>(&self, emulator_modules: &mut EmulatorModules<ET, S>)
+    fn post_qemu_init<ET>(&self, emulator_modules: &mut EmulatorModules<ET, S>)
     where
         ET: EmulatorModuleTuple<S>,
     {
@@ -717,7 +717,7 @@ where
     }
 
     fn address_filter_mut(&mut self) -> &mut Self::ModuleAddressFilter {
-        unsafe { addr_of_mut!(NOP_ADDRESS_FILTER).as_mut().unwrap().get_mut() }
+        unsafe { (&raw mut NOP_ADDRESS_FILTER).as_mut().unwrap().get_mut() }
     }
 }
 

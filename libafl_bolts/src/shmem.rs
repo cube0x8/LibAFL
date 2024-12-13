@@ -656,7 +656,7 @@ pub mod unix_shmem {
             ops::{Deref, DerefMut},
             ptr, slice,
         };
-        use std::{io, process};
+        use std::{io, path::Path, process};
 
         use libc::{
             c_int, c_uchar, close, fcntl, ftruncate, mmap, munmap, shm_open, shm_unlink, shmat,
@@ -691,25 +691,30 @@ pub mod unix_shmem {
 
         impl MmapShMem {
             /// Create a new [`MmapShMem`]
-            /// This will *NOT* automatically delete the shmem files, meaning that it's user's responsibility to delete all `/dev/shm/libafl_*` after fuzzing
-            pub fn new(map_size: usize, rand_id: u32) -> Result<Self, Error> {
+            ///
+            /// At most [`MAX_MMAP_FILENAME_LEN`] - 2 bytes from filename will be used.
+            ///
+            /// This will *NOT* automatically delete the shmem files, meaning that it's user's responsibility to delete them after fuzzing
+            pub fn new(map_size: usize, filename: impl AsRef<Path>) -> Result<Self, Error> {
+                let filename_bytes = filename.as_ref().as_os_str().as_encoded_bytes();
+
+                let mut filename_path: [u8; 20] = [0_u8; MAX_MMAP_FILENAME_LEN];
+                // Keep room for the leading slash and trailing NULL.
+                let max_copy = usize::min(filename_bytes.len(), MAX_MMAP_FILENAME_LEN - 2);
+                filename_path[0] = b'/';
+                filename_path[1..=max_copy].copy_from_slice(&filename_bytes[..max_copy]);
+
+                log::info!(
+                    "{} Creating shmem {} {:?}",
+                    map_size,
+                    process::id(),
+                    filename_path
+                );
+
                 // # Safety
                 // No user-provided potentially unsafe parameters.
                 // FFI Calls.
                 unsafe {
-                    let mut full_file_name = format!("/libafl_{}_{}", process::id(), rand_id);
-                    // leave one byte space for the null byte.
-                    full_file_name.truncate(MAX_MMAP_FILENAME_LEN - 1);
-                    let mut filename_path = [0_u8; MAX_MMAP_FILENAME_LEN];
-                    filename_path[0..full_file_name.len()]
-                        .copy_from_slice(full_file_name.as_bytes());
-                    filename_path[full_file_name.len()] = 0; // Null terminate!
-                    log::info!(
-                        "{} Creating shmem {} {:#?}",
-                        map_size,
-                        process::id(),
-                        filename_path
-                    );
                     /* create the shared memory segment as if it was a file */
                     let shm_fd = shm_open(
                         filename_path.as_ptr() as *const _,
@@ -839,19 +844,25 @@ pub mod unix_shmem {
                 &self.filename_path
             }
 
-            /// If called, the shared memory will also be available in subprocesses.
+            /// Makes a shared memory mapping available in other processes.
             ///
-            /// You likely want to pass the [`crate::shmem::ShMemDescription`] and reopen the shared memory in the child process using [`crate::shmem::ShMemProvider::shmem_from_description`].
+            /// Only available on UNIX systems at the moment.
+            ///
+            /// You likely want to pass the [`crate::shmem::ShMemDescription`] of the returned [`ShMem`]
+            /// and reopen the shared memory in the child process using [`crate::shmem::ShMemProvider::shmem_from_description`].
             ///
             /// # Errors
             ///
             /// This function will return an error if the appropriate flags could not be extracted or set.
-            pub fn persist_for_child_processes(&self) -> Result<&Self, Error> {
+            #[cfg(any(unix, doc))]
+            pub fn persist(self) -> Result<Self, Error> {
+                let fd = self.shm_fd;
+
                 // # Safety
                 // No user-provided potentially unsafe parameters.
                 // FFI Calls.
                 unsafe {
-                    let flags = fcntl(self.shm_fd, libc::F_GETFD);
+                    let flags = fcntl(fd, libc::F_GETFD);
 
                     if flags == -1 {
                         return Err(Error::os_error(
@@ -860,62 +871,14 @@ pub mod unix_shmem {
                         ));
                     }
 
-                    if fcntl(self.shm_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                    if fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
                         return Err(Error::os_error(
                             io::Error::last_os_error(),
                             "Failed to set FD flags",
                         ));
                     }
                 }
-
                 Ok(self)
-            }
-        }
-
-        /// A [`ShMemProvider`] which uses [`shm_open`] and [`mmap`] to provide shared memory mappings.
-        #[cfg(unix)]
-        #[derive(Clone, Debug)]
-        pub struct MmapShMemProvider {}
-
-        unsafe impl Send for MmapShMemProvider {}
-
-        #[cfg(unix)]
-        impl Default for MmapShMemProvider {
-            fn default() -> Self {
-                Self::new().unwrap()
-            }
-        }
-
-        /// Implement [`ShMemProvider`] for [`MmapShMemProvider`].
-        #[cfg(unix)]
-        impl ShMemProvider for MmapShMemProvider {
-            type ShMem = MmapShMem;
-
-            fn new() -> Result<Self, Error> {
-                Ok(Self {})
-            }
-            fn new_shmem(&mut self, map_size: usize) -> Result<Self::ShMem, Error> {
-                let mut rand = StdRand::with_seed(crate::rands::random_seed());
-                let id = rand.next() as u32;
-                MmapShMem::new(map_size, id)
-            }
-
-            fn shmem_from_id_and_size(
-                &mut self,
-                id: ShMemId,
-                size: usize,
-            ) -> Result<Self::ShMem, Error> {
-                MmapShMem::shmem_from_id_and_size(id, size)
-            }
-
-            fn release_shmem(&mut self, shmem: &mut Self::ShMem) {
-                let fd = CStr::from_bytes_until_nul(shmem.id().as_array())
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .parse()
-                    .unwrap();
-                unsafe { close(fd) };
             }
         }
 
@@ -971,6 +934,71 @@ pub mod unix_shmem {
                     // unlike unix common shmem we don't have refcounter.
                     // so there's no guarantee that there's no other process still using it.
                 }
+            }
+        }
+
+        /// A [`ShMemProvider`] which uses [`shm_open`] and [`mmap`] to provide shared memory mappings.
+        #[cfg(unix)]
+        #[derive(Clone, Debug)]
+        pub struct MmapShMemProvider {}
+
+        impl MmapShMemProvider {
+            /// Create a [`MmapShMem`] with the specified size and id.
+            ///
+            /// At most [`MAX_MMAP_FILENAME_LEN`] - 2 bytes from id will be used.
+            #[cfg(any(unix, doc))]
+            pub fn new_shmem_with_id(
+                &mut self,
+                map_size: usize,
+                id: impl AsRef<Path>,
+            ) -> Result<MmapShMem, Error> {
+                MmapShMem::new(map_size, id)
+            }
+        }
+
+        unsafe impl Send for MmapShMemProvider {}
+
+        #[cfg(unix)]
+        impl Default for MmapShMemProvider {
+            fn default() -> Self {
+                Self::new().unwrap()
+            }
+        }
+
+        /// Implement [`ShMemProvider`] for [`MmapShMemProvider`].
+        #[cfg(unix)]
+        impl ShMemProvider for MmapShMemProvider {
+            type ShMem = MmapShMem;
+
+            fn new() -> Result<Self, Error> {
+                Ok(Self {})
+            }
+
+            fn new_shmem(&mut self, map_size: usize) -> Result<Self::ShMem, Error> {
+                let mut rand = StdRand::with_seed(crate::rands::random_seed());
+                let id = rand.next() as u32;
+                let mut full_file_name = format!("libafl_{}_{}", process::id(), id);
+                // leave one byte space for the null byte.
+                full_file_name.truncate(MAX_MMAP_FILENAME_LEN - 1);
+                MmapShMem::new(map_size, full_file_name)
+            }
+
+            fn shmem_from_id_and_size(
+                &mut self,
+                id: ShMemId,
+                size: usize,
+            ) -> Result<Self::ShMem, Error> {
+                MmapShMem::shmem_from_id_and_size(id, size)
+            }
+
+            fn release_shmem(&mut self, shmem: &mut Self::ShMem) {
+                let fd = CStr::from_bytes_until_nul(shmem.id().as_array())
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                unsafe { close(fd) };
             }
         }
 
@@ -1328,6 +1356,188 @@ pub mod unix_shmem {
             }
         }
     }
+
+    /// Module containing `memfd` shared memory support, usable on Linux and Android.
+    #[cfg(all(
+        unix,
+        feature = "std",
+        any(target_os = "linux", target_os = "android", target_os = "freebsd")
+    ))]
+    pub mod memfd {
+        use alloc::string::ToString;
+        use core::{
+            ops::{Deref, DerefMut},
+            ptr, slice,
+        };
+        use std::{ffi::CString, os::fd::IntoRawFd};
+
+        use libc::{
+            c_void, close, fstat, ftruncate, mmap, munmap, MAP_SHARED, PROT_READ, PROT_WRITE,
+        };
+        use nix::sys::memfd::{memfd_create, MemFdCreateFlag};
+
+        use crate::{
+            shmem::{ShMem, ShMemId, ShMemProvider},
+            Error,
+        };
+
+        /// An memfd based impl for linux/android
+        #[cfg(unix)]
+        #[derive(Clone, Debug)]
+        pub struct MemfdShMem {
+            id: ShMemId,
+            map: *mut u8,
+            map_size: usize,
+        }
+
+        impl MemfdShMem {
+            /// Create a new shared memory mapping, using shmget/shmat
+            pub fn new(map_size: usize) -> Result<Self, Error> {
+                unsafe {
+                    let c_str = CString::new("libAFL").unwrap();
+                    let Ok(fd) = memfd_create(&c_str, MemFdCreateFlag::empty()) else {
+                        return Err(Error::last_os_error("Failed to create memfd".to_string()));
+                    };
+                    let fd = fd.into_raw_fd();
+
+                    #[allow(clippy::cast_possible_wrap)]
+                    if ftruncate(fd, map_size as i64) == -1 {
+                        close(fd);
+                        return Err(Error::last_os_error(format!(
+                            "Failed to ftruncate memfd to {map_size}"
+                        )));
+                    }
+                    let map = mmap(
+                        ptr::null_mut(),
+                        map_size,
+                        PROT_READ | PROT_WRITE,
+                        MAP_SHARED,
+                        fd,
+                        0,
+                    );
+                    if map == usize::MAX as *mut c_void {
+                        close(fd);
+                        return Err(Error::unknown(
+                            "Failed to map the memfd mapping".to_string(),
+                        ));
+                    }
+                    Ok(Self {
+                        id: ShMemId::from_int(fd),
+                        map: map as *mut u8,
+                        map_size,
+                    })
+                }
+            }
+
+            fn shmem_from_id_and_size(id: ShMemId, map_size: usize) -> Result<Self, Error> {
+                let fd = i32::from(id);
+                unsafe {
+                    let mut stat = std::mem::zeroed();
+                    if fstat(fd, &mut stat) == -1 {
+                        return Err(Error::unknown(
+                            "Failed to map the memfd mapping".to_string(),
+                        ));
+                    }
+                    #[allow(clippy::cast_sign_loss)]
+                    if stat.st_size as usize != map_size {
+                        return Err(Error::unknown(
+                            "The mapping's size differs from the requested size".to_string(),
+                        ));
+                    }
+                    let map = mmap(
+                        ptr::null_mut(),
+                        map_size,
+                        PROT_READ | PROT_WRITE,
+                        MAP_SHARED,
+                        fd,
+                        0,
+                    );
+                    if map == usize::MAX as *mut c_void {
+                        return Err(Error::last_os_error(format!(
+                            "mmap() failed for map with fd {fd:?}"
+                        )));
+                    }
+                    Ok(Self {
+                        id: ShMemId::from_int(fd),
+                        map: map as *mut u8,
+                        map_size,
+                    })
+                }
+            }
+        }
+
+        #[cfg(unix)]
+        impl ShMem for MemfdShMem {
+            fn id(&self) -> ShMemId {
+                self.id
+            }
+        }
+
+        impl Deref for MemfdShMem {
+            type Target = [u8];
+
+            fn deref(&self) -> &[u8] {
+                unsafe { slice::from_raw_parts(self.map, self.map_size) }
+            }
+        }
+
+        impl DerefMut for MemfdShMem {
+            fn deref_mut(&mut self) -> &mut [u8] {
+                unsafe { slice::from_raw_parts_mut(self.map, self.map_size) }
+            }
+        }
+
+        /// [`Drop`] implementation for [`MemfdShMem`], which cleans up the mapping.
+        #[cfg(unix)]
+        impl Drop for MemfdShMem {
+            #[allow(trivial_numeric_casts)]
+            fn drop(&mut self) {
+                let fd = i32::from(self.id);
+
+                unsafe {
+                    munmap(self.map as *mut _, self.map_size);
+                    close(fd);
+                }
+            }
+        }
+
+        /// A [`ShMemProvider`] which uses memfd to provide shared memory mappings.
+        #[cfg(unix)]
+        #[derive(Clone, Debug)]
+        pub struct MemfdShMemProvider {}
+
+        unsafe impl Send for MemfdShMemProvider {}
+
+        #[cfg(unix)]
+        impl Default for MemfdShMemProvider {
+            fn default() -> Self {
+                Self::new().unwrap()
+            }
+        }
+
+        /// Implement [`ShMemProvider`] for [`MemfdShMemProvider`]
+        #[cfg(unix)]
+        impl ShMemProvider for MemfdShMemProvider {
+            type ShMem = MemfdShMem;
+
+            fn new() -> Result<Self, Error> {
+                Ok(Self {})
+            }
+
+            fn new_shmem(&mut self, map_size: usize) -> Result<Self::ShMem, Error> {
+                let mapping = MemfdShMem::new(map_size)?;
+                Ok(mapping)
+            }
+
+            fn shmem_from_id_and_size(
+                &mut self,
+                id: ShMemId,
+                size: usize,
+            ) -> Result<Self::ShMem, Error> {
+                MemfdShMem::shmem_from_id_and_size(id, size)
+            }
+        }
+    }
 }
 
 /// Then `win32` implementation for shared memory.
@@ -1622,16 +1832,75 @@ mod tests {
 
     use crate::{
         shmem::{ShMemProvider, StdShMemProvider},
-        AsSlice, AsSliceMut,
+        AsSlice, AsSliceMut, Error,
     };
 
     #[test]
     #[serial]
     #[cfg_attr(miri, ignore)]
-    fn test_shmem_service() {
-        let mut provider = StdShMemProvider::new().unwrap();
-        let mut map = provider.new_shmem(1024).unwrap();
+    fn test_shmem_service() -> Result<(), Error> {
+        let mut provider = StdShMemProvider::new()?;
+        let mut map = provider.new_shmem(1024)?;
         map.as_slice_mut()[0] = 1;
-        assert!(map.as_slice()[0] == 1);
+        assert_eq!(1, map.as_slice()[0]);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(miri, ignore)]
+    fn test_persist_shmem() -> Result<(), Error> {
+        use core::ffi::CStr;
+        use std::{
+            env,
+            process::{Command, Stdio},
+            string::ToString,
+        };
+
+        use crate::shmem::{MmapShMemProvider, ShMem as _, ShMemId};
+
+        // relies on the fact that the ID in a ShMemDescription is always a string for MmapShMem
+        match env::var("SHMEM_SIZE") {
+            Ok(size) => {
+                let mut provider = MmapShMemProvider::new()?;
+                let id = ShMemId::from_string(&env::var("SHMEM_ID").unwrap());
+                let size = size.parse().unwrap();
+                let mut shmem = provider.shmem_from_id_and_size(id, size)?;
+                shmem[0] = 1;
+            }
+            Err(env::VarError::NotPresent) => {
+                let mut provider = MmapShMemProvider::new()?;
+                let mut shmem = provider.new_shmem(1)?.persist()?;
+                shmem.fill(0);
+                let description = shmem.description();
+
+                // call the test binary again
+                // with certain env variables set to prevent infinite loops
+                // and with an added arg to only run this test
+                //
+                // a command is necessary to create the required distance between the two processes
+                // with threads/fork it works without the additional steps to persist the ShMem regardless
+                let status = Command::new(env::current_exe().unwrap())
+                    .env(
+                        "SHMEM_ID",
+                        CStr::from_bytes_until_nul(description.id.as_array())
+                            .unwrap()
+                            .to_str()
+                            .unwrap(),
+                    )
+                    .env("SHMEM_SIZE", description.size.to_string())
+                    .arg("shmem::tests::test_persist_shmem")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .unwrap();
+
+                assert!(status.success());
+                assert_eq!(shmem[0], 1);
+            }
+            Err(e) => panic!("{e}"),
+        }
+
+        Ok(())
     }
 }

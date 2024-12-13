@@ -118,12 +118,7 @@ pub mod serdeany_registry {
         boxed::Box,
         string::{String, ToString},
     };
-    use core::{
-        any::TypeId,
-        fmt,
-        hash::BuildHasherDefault,
-        ptr::{addr_of, addr_of_mut},
-    };
+    use core::{any::TypeId, fmt, hash::BuildHasherDefault};
 
     use hashbrown::{
         hash_map::{Values, ValuesMut},
@@ -160,8 +155,9 @@ pub mod serdeany_registry {
         {
             let id: TypeRepr = visitor.next_element()?.unwrap();
 
+            let registry = &raw const REGISTRY;
             let cb = unsafe {
-                (*addr_of!(REGISTRY))
+                (*registry)
                     .deserializers
                     .as_ref()
                     .ok_or_else(||
@@ -232,8 +228,9 @@ pub mod serdeany_registry {
         where
             T: crate::serdeany::SerdeAny + Serialize + serde::de::DeserializeOwned,
         {
+            let registry = &raw mut REGISTRY;
             unsafe {
-                (*addr_of_mut!(REGISTRY)).register::<T>();
+                (*registry).register::<T>();
             }
         }
 
@@ -243,8 +240,9 @@ pub mod serdeany_registry {
         /// This may never be called concurrently or at the same time as `register`.
         /// It dereferences the `REGISTRY` hashmap and adds the given type to it.
         pub unsafe fn finalize() {
+            let registry = &raw mut REGISTRY;
             unsafe {
-                (*addr_of_mut!(REGISTRY)).finalize();
+                (*registry).finalize();
             }
         }
     }
@@ -353,9 +351,10 @@ pub mod serdeany_registry {
             #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
+            let registry = &raw const REGISTRY;
             assert!(
                         unsafe {
-                            (*addr_of!(REGISTRY))
+                            (*registry)
                                 .deserializers
                                 .as_ref()
                                 .expect(super::ERR_EMPTY_TYPES_REGISTER)
@@ -615,10 +614,10 @@ pub mod serdeany_registry {
             let type_repr = type_repr::<T>();
             #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
-
+            let registry = &raw const REGISTRY;
             assert!(
                         unsafe {
-                            (*addr_of!(REGISTRY))
+                            (*registry)
                                 .deserializers
                                 .as_ref()
                                 .expect(super::ERR_EMPTY_TYPES_REGISTER)
@@ -826,6 +825,26 @@ macro_rules! create_register {
     ($struct_type:ty) => {};
 }
 
+/// Manually register a `SerdeAny` type in the [`RegistryBuilder`]
+///
+/// Do nothing with the `serdeany_autoreg` feature, as this will be previously registered by ctor.
+#[cfg(all(feature = "serdeany_autoreg", not(miri)))]
+#[macro_export]
+macro_rules! create_manual_register {
+    ($struct_type:ty) => {};
+}
+
+/// Manually register a `SerdeAny` type in the [`RegistryBuilder`]
+///
+/// Do nothing with the `serdeany_autoreg` feature, as this will be previously registered by ctor.
+#[cfg(not(all(feature = "serdeany_autoreg", not(miri))))]
+#[macro_export]
+macro_rules! create_manual_register {
+    ($struct_type:ty) => {
+        $crate::serdeany::RegistryBuilder::register::<$struct_type>();
+    };
+}
+
 /// Implement a [`SerdeAny`], registering it in the [`RegistryBuilder`] when on std
 #[macro_export]
 macro_rules! impl_serdeany {
@@ -854,7 +873,6 @@ macro_rules! impl_serdeany {
             }
         }
 
-        #[cfg(any(not(feature = "serdeany_autoreg"), miri))]
         impl< $( $lt $( : $clt $(+ $dlt )* )? ),+ > $struct_name < $( $lt ),+ > {
 
             /// Manually register this type at a later point in time
@@ -862,7 +880,9 @@ macro_rules! impl_serdeany {
             /// # Safety
             /// This may never be called concurrently as it dereferences the `RegistryBuilder` without acquiring a lock.
             pub unsafe fn register() {
-                $crate::serdeany::RegistryBuilder::register::<$struct_name < $( $lt ),+ >>();
+                $(
+                    $crate::create_manual_register!($struct_name < $( $opt ),+ >);
+                )*
             }
         }
 
@@ -895,7 +915,6 @@ macro_rules! impl_serdeany {
             }
         }
 
-        #[cfg(any(not(feature = "serdeany_autoreg"), miri))]
         impl $struct_name {
             /// Manually register this type at a later point in time
             ///
@@ -903,7 +922,7 @@ macro_rules! impl_serdeany {
             /// This may never be called concurrently as it dereferences the `RegistryBuilder` without acquiring a lock.
             #[allow(unused)]
             pub unsafe fn register() {
-                $crate::serdeany::RegistryBuilder::register::<$struct_name>();
+                $crate::create_manual_register!($struct_name);
             }
         }
 

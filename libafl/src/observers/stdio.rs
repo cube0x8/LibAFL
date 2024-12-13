@@ -2,7 +2,10 @@
 //!
 //! The [`StdOutObserver`] and [`StdErrObserver`] observers look at the stdout of a program
 //! The executor must explicitly support these observers.
-//! For example, they are supported on the [`crate::executors::CommandExecutor`].
+#![cfg_attr(
+    unix,
+    doc = r"For example, they are supported on the [`crate::executors::CommandExecutor`]."
+)]
 
 use alloc::borrow::Cow;
 use std::vec::Vec;
@@ -16,11 +19,8 @@ use crate::{observers::Observer, Error};
 /// Only works for supported executors.
 ///
 /// # Example usage
-#[cfg_attr(all(feature = "std", target_os = "linux", not(miri)), doc = " ```")] // miri doesn't like the Command crate, linux as a shorthand for the availability of base64
-#[cfg_attr(
-    not(all(feature = "std", target_os = "linux", not(miri))),
-    doc = " ```ignore"
-)]
+#[cfg_attr(all(target_os = "linux", not(miri)), doc = " ```")] // miri doesn't like the Command crate, linux as a shorthand for the availability of base64
+#[cfg_attr(not(all(target_os = "linux", not(miri))), doc = " ```ignore")]
 /// use std::borrow::Cow;
 ///
 /// use libafl::{

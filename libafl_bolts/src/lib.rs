@@ -147,8 +147,6 @@ use alloc::{borrow::Cow, vec::Vec};
 use core::hash::BuildHasher;
 #[cfg(any(feature = "xxh3", feature = "alloc"))]
 use core::hash::Hasher;
-#[cfg(all(unix, feature = "std"))]
-use core::ptr;
 #[cfg(feature = "std")]
 use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(all(unix, feature = "std"))]
@@ -300,6 +298,8 @@ pub enum Error {
     Unknown(String, ErrorBacktrace),
     /// Error with the corpora
     InvalidCorpus(String, ErrorBacktrace),
+    /// Error specific to a runtime like QEMU or Frida
+    Runtime(String, ErrorBacktrace),
 }
 
 impl Error {
@@ -438,6 +438,26 @@ impl Error {
     {
         Error::InvalidCorpus(arg.into(), ErrorBacktrace::new())
     }
+
+    /// Error specific to some runtime, like QEMU or Frida
+    #[must_use]
+    pub fn runtime<S>(arg: S) -> Self
+    where
+        S: Into<String>,
+    {
+        Error::Runtime(arg.into(), ErrorBacktrace::new())
+    }
+}
+
+impl core::error::Error for Error {
+    #[cfg(feature = "std")]
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        if let Self::OsError(err, _, _) = self {
+            Some(err)
+        } else {
+            None
+        }
+    }
 }
 
 impl Display for Error {
@@ -500,6 +520,10 @@ impl Display for Error {
             }
             Self::InvalidCorpus(s, b) => {
                 write!(f, "Invalid corpus: {0}", &s)?;
+                display_error_backtrace(f, b)
+            }
+            Self::Runtime(s, b) => {
+                write!(f, "Runtime error: {0}", &s)?;
                 display_error_backtrace(f, b)
             }
         }
@@ -611,10 +635,13 @@ impl From<windows_result::Error> for Error {
 impl From<pyo3::PyErr> for Error {
     fn from(err: pyo3::PyErr) -> Self {
         pyo3::Python::with_gil(|py| {
-            if err.matches(
-                py,
-                pyo3::types::PyType::new_bound::<pyo3::exceptions::PyKeyboardInterrupt>(py),
-            ) {
+            if err
+                .matches(
+                    py,
+                    pyo3::types::PyType::new::<pyo3::exceptions::PyKeyboardInterrupt>(py),
+                )
+                .unwrap()
+            {
                 Self::shutting_down()
             } else {
                 Self::illegal_state(format!("Python exception: {err:?}"))
@@ -622,12 +649,6 @@ impl From<pyo3::PyErr> for Error {
         })
     }
 }
-
-#[cfg(all(not(nightly), feature = "std"))]
-impl std::error::Error for Error {}
-
-#[cfg(nightly)]
-impl core::error::Error for Error {}
 
 /// The purpose of this module is to alleviate imports of many components by adding a glob import.
 #[cfg(feature = "prelude")]
@@ -665,7 +686,18 @@ pub trait AsSlice<'a> {
     fn as_slice(&'a self) -> Self::SliceRef;
 }
 
-impl<'a, T, R> AsSlice<'a> for R
+/// Can be converted to a slice
+pub trait AsSizedSlice<'a, const N: usize> {
+    /// Type of the entries of this slice
+    type Entry: 'a;
+    /// Type of the reference to this slice
+    type SliceRef: Deref<Target = [Self::Entry; N]>;
+
+    /// Convert to a slice
+    fn as_sized_slice(&'a self) -> Self::SliceRef;
+}
+
+impl<'a, T, R: ?Sized> AsSlice<'a> for R
 where
     T: 'a,
     R: Deref<Target = [T]>,
@@ -674,6 +706,19 @@ where
     type SliceRef = &'a [T];
 
     fn as_slice(&'a self) -> Self::SliceRef {
+        self
+    }
+}
+
+impl<'a, T, const N: usize, R: ?Sized> AsSizedSlice<'a, N> for R
+where
+    T: 'a,
+    R: Deref<Target = [T; N]>,
+{
+    type Entry = T;
+    type SliceRef = &'a [T; N];
+
+    fn as_sized_slice(&'a self) -> Self::SliceRef {
         self
     }
 }
@@ -687,7 +732,16 @@ pub trait AsSliceMut<'a>: AsSlice<'a> {
     fn as_slice_mut(&'a mut self) -> Self::SliceRefMut;
 }
 
-impl<'a, T, R> AsSliceMut<'a> for R
+/// Can be converted to a mutable slice
+pub trait AsSizedSliceMut<'a, const N: usize>: AsSizedSlice<'a, N> {
+    /// Type of the mutable reference to this slice
+    type SliceRefMut: DerefMut<Target = [Self::Entry; N]>;
+
+    /// Convert to a slice
+    fn as_sized_slice_mut(&'a mut self) -> Self::SliceRefMut;
+}
+
+impl<'a, T, R: ?Sized> AsSliceMut<'a> for R
 where
     T: 'a,
     R: DerefMut<Target = [T]>,
@@ -695,6 +749,18 @@ where
     type SliceRefMut = &'a mut [T];
 
     fn as_slice_mut(&'a mut self) -> Self::SliceRefMut {
+        &mut *self
+    }
+}
+
+impl<'a, T, const N: usize, R: ?Sized> AsSizedSliceMut<'a, N> for R
+where
+    T: 'a,
+    R: DerefMut<Target = [T; N]>,
+{
+    type SliceRefMut = &'a mut [T; N];
+
+    fn as_sized_slice_mut(&'a mut self) -> Self::SliceRefMut {
         &mut *self
     }
 }
@@ -973,9 +1039,11 @@ impl SimpleFdLogger {
         // # Safety
         // The passed-in `fd` has to be a legal file descriptor to log to.
         // We also access a shared variable here.
+        let logger = &raw mut LIBAFL_RAWFD_LOGGER;
         unsafe {
-            (*ptr::addr_of_mut!(LIBAFL_RAWFD_LOGGER)).set_fd(log_fd);
-            log::set_logger(&*ptr::addr_of!(LIBAFL_RAWFD_LOGGER))?;
+            let logger = &mut *logger;
+            logger.set_fd(log_fd);
+            log::set_logger(logger)?;
         }
         Ok(())
     }
@@ -1054,6 +1122,18 @@ macro_rules! nonzero {
                 None => panic!("Value passed to `nonzero!` was zero"),
             }
         }
+    };
+}
+
+/// Get a [`core::ptr::NonNull`] to a global static mut (or similar).
+///
+/// The same as [`core::ptr::addr_of_mut`] or `&raw mut`, but wrapped in said [`NonNull`](core::ptr::NonNull).
+#[macro_export]
+macro_rules! nonnull_raw_mut {
+    ($val:expr) => {
+        // # Safety
+        // The pointer to a value will never be null (unless we're on an archaic OS in a CTF challenge).
+        unsafe { core::ptr::NonNull::new(&raw mut $val).unwrap_unchecked() }
     };
 }
 
@@ -1203,9 +1283,6 @@ pub mod pybind {
 mod tests {
 
     #[cfg(all(feature = "std", unix))]
-    use core::ptr;
-
-    #[cfg(all(feature = "std", unix))]
     use crate::LIBAFL_RAWFD_LOGGER;
 
     #[test]
@@ -1214,8 +1291,10 @@ mod tests {
         use std::{io::stdout, os::fd::AsRawFd};
 
         unsafe { LIBAFL_RAWFD_LOGGER.fd = stdout().as_raw_fd() };
+
+        let libafl_rawfd_logger_fd = &raw const LIBAFL_RAWFD_LOGGER;
         unsafe {
-            log::set_logger(&*ptr::addr_of!(LIBAFL_RAWFD_LOGGER)).unwrap();
+            log::set_logger(&*libafl_rawfd_logger_fd).unwrap();
         }
         log::set_max_level(log::LevelFilter::Debug);
         log::info!("Test");

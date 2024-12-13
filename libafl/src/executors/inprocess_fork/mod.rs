@@ -55,7 +55,7 @@ where
     EM: EventFirer<State = S> + EventRestarter<State = S>,
     OF: Feedback<EM, S::Input, OT, S>,
     S: HasSolutions,
-    Z: HasObjective<Objective = OF, State = S>,
+    Z: HasObjective<Objective = OF>,
 {
     #[allow(clippy::too_many_arguments)]
     /// The constructor for `InProcessForkExecutor`
@@ -93,7 +93,6 @@ where
     SP: ShMemProvider,
     HT: ExecutorHooksTuple<S>,
     EM: UsesState<State = S>,
-    Z: UsesState<State = S>,
 {
     harness_fn: &'a mut H,
     inner: GenericInProcessForkExecutorInner<HT, OT, S, SP, EM, Z>,
@@ -107,7 +106,6 @@ where
     SP: ShMemProvider,
     HT: ExecutorHooksTuple<S> + Debug,
     EM: UsesState<State = S>,
-    Z: UsesState<State = S>,
 {
     #[cfg(target_os = "linux")]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -135,7 +133,6 @@ where
     SP: ShMemProvider,
     HT: ExecutorHooksTuple<S>,
     EM: UsesState<State = S>,
-    Z: UsesState<State = S>,
 {
     type State = S;
 }
@@ -149,7 +146,6 @@ where
     SP: ShMemProvider,
     HT: ExecutorHooksTuple<S>,
     EM: EventFirer<State = S> + EventRestarter<State = S>,
-    Z: UsesState<State = S>,
 {
     #[allow(unreachable_code)]
     #[inline]
@@ -191,7 +187,7 @@ where
     EM: EventFirer<State = S> + EventRestarter<State = S>,
     OF: Feedback<EM, S::Input, OT, S>,
     S: State + HasSolutions,
-    Z: HasObjective<Objective = OF, State = S>,
+    Z: HasObjective<Objective = OF>,
 {
     /// Creates a new [`GenericInProcessForkExecutor`] with custom hooks
     #[allow(clippy::too_many_arguments)]
@@ -242,7 +238,6 @@ where
     OT: ObserversTuple<S::Input, S>,
     SP: ShMemProvider,
     EM: UsesState<State = S>,
-    Z: UsesState<State = S>,
 {
     type Observers = OT;
     #[inline]
@@ -259,7 +254,6 @@ where
 /// signal hooks and `panic_hooks` for the child process
 pub mod child_signal_handlers {
     use alloc::boxed::Box;
-    use core::ptr::addr_of_mut;
     use std::panic;
 
     use libafl_bolts::os::unix_signals::{ucontext_t, Signal};
@@ -284,7 +278,7 @@ pub mod child_signal_handlers {
         let old_hook = panic::take_hook();
         panic::set_hook(Box::new(move |panic_info| unsafe {
             old_hook(panic_info);
-            let data = addr_of_mut!(FORK_EXECUTOR_GLOBAL_DATA);
+            let data = &raw mut FORK_EXECUTOR_GLOBAL_DATA;
             if !data.is_null() && (*data).is_valid() {
                 let executor = (*data).executor_mut::<E>();
                 let mut observers = executor.observers_mut();
@@ -355,7 +349,7 @@ pub mod child_signal_handlers {
 }
 
 #[cfg(test)]
-#[cfg(all(feature = "std", feature = "fork", unix))]
+#[cfg(all(feature = "fork", unix))]
 mod tests {
     use libafl_bolts::tuples::tuple_list;
     use serial_test::serial;

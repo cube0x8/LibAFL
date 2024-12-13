@@ -29,10 +29,7 @@ use iced_x86::{
     BlockEncoder, Code, DecoderOptions, Instruction, InstructionBlock, MemoryOperand, MemorySize,
     OpKind, Register,
 };
-use libafl::{
-    inputs::{HasTargetBytes, Input},
-    Error,
-};
+use libafl::Error;
 use libafl_targets::{cmps::__libafl_targets_cmplog_instructions, CMPLOG_MAP_W};
 use rangemap::RangeMap;
 
@@ -124,7 +121,7 @@ impl FridaRuntime for CmpLogRuntime {
     fn init(
         &mut self,
         _gum: &frida_gum::Gum,
-        _ranges: &RangeMap<usize, (u16, String)>,
+        _ranges: &RangeMap<u64, (u16, String)>,
         _module_map: &Rc<ModuleMap>,
     ) {
         self.generate_instrumentation_blobs();
@@ -132,11 +129,11 @@ impl FridaRuntime for CmpLogRuntime {
 
     fn deinit(&mut self, _gum: &frida_gum::Gum) {}
 
-    fn pre_exec<I: Input + HasTargetBytes>(&mut self, _input: &I) -> Result<(), Error> {
+    fn pre_exec(&mut self, _input_bytes: &[u8]) -> Result<(), Error> {
         Ok(())
     }
 
-    fn post_exec<I: Input + HasTargetBytes>(&mut self, _input: &I) -> Result<(), Error> {
+    fn post_exec(&mut self, _input_bytes: &[u8]) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -218,7 +215,7 @@ impl CmpLogRuntime {
                 ; stp x26, x27, [sp, #-0x10]!
                 ; stp x28, x29, [sp, #-0x10]!
                 ; stp x30, xzr, [sp, #-0x10]!
-                ; .dword 0xd53b4218u32 as i32 // mrs x24, nzcv
+                ; .u32 0xd53b4218_u32 // mrs x24, nzcv
                 // jump to rust based population of the lists
                 ; mov x2, x0
                 ; adr x3, >done
@@ -226,7 +223,7 @@ impl CmpLogRuntime {
                 ; ldr x0, >self_addr
                 ; blr x4
                 // restore the reg state before returning to the caller
-                ; .dword 0xd51b4218u32 as i32 // msr nzcv, x24
+                ; .u32 0xd51b4218_u32 // msr nzcv, x24
                 ; ldp x30, xzr, [sp], #0x10
                 ; ldp x28, x29, [sp], #0x10
                 ; ldp x26, x27, [sp], #0x10
@@ -244,9 +241,9 @@ impl CmpLogRuntime {
                 ; ldp x2, x3, [sp], #0x10
                 ; b >done
                 ; self_addr:
-                ; .qword core::ptr::from_mut(self) as *mut c_void as i64
+                ; .u64 core::ptr::from_mut(self) as *mut c_void as u64
                 ; populate_lists:
-                ; .qword  CmpLogRuntime::populate_lists as *mut c_void as i64
+                ; .u64 CmpLogRuntime::populate_lists as *mut c_void as u64
                 ; done:
             );};
         }

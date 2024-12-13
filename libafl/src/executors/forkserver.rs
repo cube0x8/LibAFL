@@ -26,6 +26,7 @@ use libafl_bolts::{
     tuples::{Handle, Handled, MatchNameRef, Prepend, RefIndexable},
     AsSlice, AsSliceMut, Truncate,
 };
+use libc::RLIM_INFINITY;
 use nix::{
     sys::{
         select::{pselect, FdSet},
@@ -134,6 +135,8 @@ pub trait ConfigTarget {
     fn setsid(&mut self) -> &mut Self;
     /// Sets a mem limit
     fn setlimit(&mut self, memlimit: u64) -> &mut Self;
+    /// enables core dumps (rlimit = infinity)
+    fn set_coredump(&mut self, enable: bool) -> &mut Self;
     /// Sets the stdin
     fn setstdin(&mut self, fd: RawFd, use_stdin: bool) -> &mut Self;
     /// Sets the AFL forkserver pipes
@@ -220,19 +223,27 @@ impl ConfigTarget for Command {
                 rlim_cur: memlimit,
                 rlim_max: memlimit,
             };
-            let r0 = libc::rlimit {
-                rlim_cur: 0,
-                rlim_max: 0,
-            };
-
             #[cfg(target_os = "openbsd")]
-            let mut ret = unsafe { libc::setrlimit(libc::RLIMIT_RSS, &r) };
+            let ret = unsafe { libc::setrlimit(libc::RLIMIT_RSS, &r) };
             #[cfg(not(target_os = "openbsd"))]
-            let mut ret = unsafe { libc::setrlimit(libc::RLIMIT_AS, &r) };
+            let ret = unsafe { libc::setrlimit(libc::RLIMIT_AS, &r) };
             if ret < 0 {
                 return Err(io::Error::last_os_error());
             }
-            ret = unsafe { libc::setrlimit(libc::RLIMIT_CORE, &r0) };
+            Ok(())
+        };
+        // # Safety
+        // This calls our non-shady function from above.
+        unsafe { self.pre_exec(func) }
+    }
+
+    fn set_coredump(&mut self, enable: bool) -> &mut Self {
+        let func = move || {
+            let r0 = libc::rlimit {
+                rlim_cur: if enable { RLIM_INFINITY } else { 0 },
+                rlim_max: if enable { RLIM_INFINITY } else { 0 },
+            };
+            let ret = unsafe { libc::setrlimit(libc::RLIMIT_CORE, &r0) };
             if ret < 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -367,6 +378,15 @@ impl Forkserver {
             return Err(Error::unknown("__AFL_SHM_ID not set. It is necessary to set this env, otherwise the forkserver cannot communicate with the fuzzer".to_string()));
         }
 
+        let afl_debug = if let Ok(afl_debug) = env::var("AFL_DEBUG") {
+            if afl_debug != "1" && afl_debug != "0" {
+                return Err(Error::illegal_argument("AFL_DEBUG must be either 1 or 0"));
+            }
+            afl_debug == "1"
+        } else {
+            false
+        };
+
         let mut st_pipe = Pipe::new().unwrap();
         let mut ctl_pipe = Pipe::new().unwrap();
 
@@ -409,6 +429,7 @@ impl Forkserver {
             .env("LD_BIND_NOW", "1")
             .envs(envs)
             .setlimit(memlimit)
+            .set_coredump(afl_debug)
             .setsid()
             .setstdin(input_filefd, use_stdin)
             .setpipe(
@@ -870,6 +891,7 @@ where
             min_input_size: self.min_input_size,
             max_input_size: self.max_input_size,
             timeout,
+            #[cfg(feature = "regex")]
             asan_obs: self
                 .asan_obs
                 .clone()
@@ -935,6 +957,7 @@ where
             min_input_size: self.min_input_size,
             max_input_size: self.max_input_size,
             timeout,
+            #[cfg(feature = "regex")]
             asan_obs: self
                 .asan_obs
                 .clone()
@@ -982,7 +1005,7 @@ where
                 0,
                 self.is_persistent,
                 self.is_deferred_frksrv,
-                self.asan_obs.is_some(),
+                self.has_asan_obs(),
                 self.map_size,
                 self.debug_child,
                 self.kill_signal.unwrap_or(KILL_SIGNAL_DEFAULT),
@@ -1435,6 +1458,18 @@ where
         self.kill_signal = Some(kill_signal);
         self
     }
+
+    /// Determine if the asan observer is present (always false if feature "regex" is disabled)
+    #[cfg(feature = "regex")]
+    pub fn has_asan_obs(&self) -> bool {
+        self.asan_obs.is_some()
+    }
+
+    /// Determine if the asan observer is present (always false if feature "regex" is disabled)
+    #[cfg(not(feature = "regex"))]
+    pub fn has_asan_obs(&self) -> bool {
+        false
+    }
 }
 
 impl<'a> ForkserverExecutorBuilder<'a, NopTargetBytesConverter<BytesInput>, UnixShMemProvider> {
@@ -1464,6 +1499,7 @@ impl<'a> ForkserverExecutorBuilder<'a, NopTargetBytesConverter<BytesInput>, Unix
             min_input_size: MIN_INPUT_SIZE_DEFAULT,
             kill_signal: None,
             timeout: None,
+            #[cfg(feature = "regex")]
             asan_obs: None,
             crash_exitcode: None,
             target_bytes_converter: NopTargetBytesConverter::new(),
@@ -1496,6 +1532,7 @@ impl<'a, TC> ForkserverExecutorBuilder<'a, TC, UnixShMemProvider> {
             min_input_size: self.min_input_size,
             kill_signal: self.kill_signal,
             timeout: self.timeout,
+            #[cfg(feature = "regex")]
             asan_obs: self.asan_obs,
             crash_exitcode: self.crash_exitcode,
             target_bytes_converter: self.target_bytes_converter,
@@ -1528,6 +1565,7 @@ impl<'a, TC, SP> ForkserverExecutorBuilder<'a, TC, SP> {
             min_input_size: self.min_input_size,
             kill_signal: self.kill_signal,
             timeout: self.timeout,
+            #[cfg(feature = "regex")]
             asan_obs: self.asan_obs,
             crash_exitcode: self.crash_exitcode,
             target_bytes_converter,
@@ -1550,7 +1588,6 @@ where
     S: State + HasExecutions,
     TC: TargetBytesConverter<Input = S::Input>,
     EM: UsesState<State = S>,
-    Z: UsesState<State = S>,
 {
     #[inline]
     fn run_target(
@@ -1635,7 +1672,7 @@ mod tests {
 
         let mut shmem = shmem_provider.new_shmem(MAP_SIZE).unwrap();
         shmem.write_to_env("__AFL_SHM_ID").unwrap();
-        let shmem_buf = shmem.as_slice_mut();
+        let shmem_buf: &mut [u8; MAP_SIZE] = shmem.as_slice_mut().try_into().unwrap();
 
         let edges_observer = HitcountsMapObserver::new(ConstMapObserver::<_, MAP_SIZE>::new(
             "shared_mem",

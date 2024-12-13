@@ -13,10 +13,7 @@ use frida_gum::{
     Backend, Gum, ModuleDetails, ModuleMap, Script,
 };
 use frida_gum_sys::gchar;
-use libafl::{
-    inputs::{HasTargetBytes, Input},
-    Error,
-};
+use libafl::Error;
 use libafl_bolts::{
     cli::{FridaScriptBackend, FuzzerOptions},
     tuples::MatchFirstType,
@@ -42,17 +39,17 @@ pub trait FridaRuntime: 'static + Debug {
     fn init(
         &mut self,
         gum: &Gum,
-        ranges: &RangeMap<usize, (u16, String)>,
+        ranges: &RangeMap<u64, (u16, String)>,
         module_map: &Rc<ModuleMap>,
     );
     /// Deinitialization
     fn deinit(&mut self, gum: &Gum);
 
     /// Method called before execution
-    fn pre_exec<I: Input + HasTargetBytes>(&mut self, input: &I) -> Result<(), Error>;
+    fn pre_exec(&mut self, input_bytes: &[u8]) -> Result<(), Error>;
 
     /// Method called after execution
-    fn post_exec<I: Input + HasTargetBytes>(&mut self, input: &I) -> Result<(), Error>;
+    fn post_exec(&mut self, input_bytes: &[u8]) -> Result<(), Error>;
 }
 
 /// The tuple for Frida Runtime
@@ -61,7 +58,7 @@ pub trait FridaRuntimeTuple: MatchFirstType + Debug {
     fn init_all(
         &mut self,
         gum: &Gum,
-        ranges: &RangeMap<usize, (u16, String)>,
+        ranges: &RangeMap<u64, (u16, String)>,
         module_map: &Rc<ModuleMap>,
     );
 
@@ -69,26 +66,26 @@ pub trait FridaRuntimeTuple: MatchFirstType + Debug {
     fn deinit_all(&mut self, gum: &Gum);
 
     /// Method called before execution
-    fn pre_exec_all<I: Input + HasTargetBytes>(&mut self, input: &I) -> Result<(), Error>;
+    fn pre_exec_all(&mut self, input_bytes: &[u8]) -> Result<(), Error>;
 
     /// Method called after execution
-    fn post_exec_all<I: Input + HasTargetBytes>(&mut self, input: &I) -> Result<(), Error>;
+    fn post_exec_all(&mut self, input_bytes: &[u8]) -> Result<(), Error>;
 }
 
 impl FridaRuntimeTuple for () {
     fn init_all(
         &mut self,
         _gum: &Gum,
-        _ranges: &RangeMap<usize, (u16, String)>,
+        _ranges: &RangeMap<u64, (u16, String)>,
         _module_map: &Rc<ModuleMap>,
     ) {
     }
     fn deinit_all(&mut self, _gum: &Gum) {}
 
-    fn pre_exec_all<I: Input + HasTargetBytes>(&mut self, _input: &I) -> Result<(), Error> {
+    fn pre_exec_all(&mut self, _input_bytes: &[u8]) -> Result<(), Error> {
         Ok(())
     }
-    fn post_exec_all<I: Input + HasTargetBytes>(&mut self, _input: &I) -> Result<(), Error> {
+    fn post_exec_all(&mut self, _input_bytes: &[u8]) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -101,7 +98,7 @@ where
     fn init_all(
         &mut self,
         gum: &Gum,
-        ranges: &RangeMap<usize, (u16, String)>,
+        ranges: &RangeMap<u64, (u16, String)>,
         module_map: &Rc<ModuleMap>,
     ) {
         self.0.init(gum, ranges, module_map);
@@ -113,14 +110,14 @@ where
         self.1.deinit_all(gum);
     }
 
-    fn pre_exec_all<I: Input + HasTargetBytes>(&mut self, input: &I) -> Result<(), Error> {
-        self.0.pre_exec(input)?;
-        self.1.pre_exec_all(input)
+    fn pre_exec_all(&mut self, input_bytes: &[u8]) -> Result<(), Error> {
+        self.0.pre_exec(input_bytes)?;
+        self.1.pre_exec_all(input_bytes)
     }
 
-    fn post_exec_all<I: Input + HasTargetBytes>(&mut self, input: &I) -> Result<(), Error> {
-        self.0.post_exec(input)?;
-        self.1.post_exec_all(input)
+    fn post_exec_all(&mut self, input_bytes: &[u8]) -> Result<(), Error> {
+        self.0.post_exec(input_bytes)?;
+        self.1.post_exec_all(input_bytes)
     }
 }
 
@@ -317,20 +314,23 @@ impl FridaInstrumentationHelperBuilder {
                     module.range().base_address().0 as usize
                 );
                 let range = module.range();
-                let start = range.base_address().0 as usize;
-                ranges
-                    .borrow_mut()
-                    .insert(start..(start + range.size()), (i as u16, module.path()));
+                let start = range.base_address().0 as u64;
+                ranges.borrow_mut().insert(
+                    start..(start + range.size() as u64),
+                    (i as u16, module.path()),
+                );
             }
             for skip in skip_ranges {
                 match skip {
-                    SkipRange::Absolute(range) => ranges.borrow_mut().remove(range),
+                    SkipRange::Absolute(range) => ranges
+                        .borrow_mut()
+                        .remove(range.start as u64..range.end as u64),
                     SkipRange::ModuleRelative { name, range } => {
                         let module_details = ModuleDetails::with_name(name).unwrap();
-                        let lib_start = module_details.range().base_address().0 as usize;
-                        ranges
-                            .borrow_mut()
-                            .remove((lib_start + range.start)..(lib_start + range.end));
+                        let lib_start = module_details.range().base_address().0 as u64;
+                        ranges.borrow_mut().remove(
+                            (lib_start + range.start as u64)..(lib_start + range.end as u64),
+                        );
                     }
                 }
             }
@@ -388,7 +388,7 @@ impl Default for FridaInstrumentationHelperBuilder {
 /// An helper that feeds `FridaInProcessExecutor` with edge-coverage instrumentation
 pub struct FridaInstrumentationHelper<'a, RT: 'a> {
     transformer: Transformer<'a>,
-    ranges: Rc<RefCell<RangeMap<usize, (u16, String)>>>,
+    ranges: Rc<RefCell<RangeMap<u64, (u16, String)>>>,
     runtimes: Rc<RefCell<RT>>,
     stalker_enabled: bool,
     pub(crate) disable_excludes: bool,
@@ -491,7 +491,7 @@ where
     #[allow(clippy::too_many_lines)]
     fn build_transformer(
         gum: &'a Gum,
-        ranges: &Rc<RefCell<RangeMap<usize, (u16, String)>>>,
+        ranges: &Rc<RefCell<RangeMap<u64, (u16, String)>>>,
         runtimes: &Rc<RefCell<RT>>,
     ) -> Transformer<'a> {
         let ranges = Rc::clone(ranges);
@@ -512,7 +512,7 @@ where
     fn transform(
         basic_block: StalkerIterator,
         output: &StalkerOutput,
-        ranges: &Rc<RefCell<RangeMap<usize, (u16, String)>>>,
+        ranges: &Rc<RefCell<RangeMap<u64, (u16, String)>>>,
         runtimes_unborrowed: &Rc<RefCell<RT>>,
         decoder: InstDecoder,
     ) {
@@ -525,7 +525,7 @@ where
             let address = instr.address();
             // log::trace!("x - block @ {:x} transformed to {:x}", address, output.writer().pc());
             //the ASAN check needs to be done before the hook_rt check due to x86 insns such as call [mem]
-            if ranges.borrow().contains_key(&(address as usize)) {
+            if ranges.borrow().contains_key(&address) {
                 let mut runtimes = (*runtimes_unborrowed).borrow_mut();
                 if first {
                     first = false;
@@ -634,8 +634,8 @@ where
             {
                 log::trace!("{basic_block_start:#016X}:{basic_block_size:X}");
                 rt.drcov_basic_blocks.push(DrCovBasicBlock::new(
-                    basic_block_start as usize,
-                    basic_block_start as usize + basic_block_size,
+                    basic_block_start,
+                    basic_block_start + basic_block_size as u64,
                 ));
             }
         }
@@ -697,7 +697,7 @@ where
     pub fn init(
         &mut self,
         gum: &'a Gum,
-        ranges: &RangeMap<usize, (u16, String)>,
+        ranges: &RangeMap<u64, (u16, String)>,
         module_map: &Rc<ModuleMap>,
     ) {
         (*self.runtimes)
@@ -706,13 +706,13 @@ where
     }
 
     /// Method called before execution
-    pub fn pre_exec<I: Input + HasTargetBytes>(&mut self, input: &I) -> Result<(), Error> {
-        (*self.runtimes).borrow_mut().pre_exec_all(input)
+    pub fn pre_exec(&mut self, input_bytes: &[u8]) -> Result<(), Error> {
+        (*self.runtimes).borrow_mut().pre_exec_all(input_bytes)
     }
 
     /// Method called after execution
-    pub fn post_exec<I: Input + HasTargetBytes>(&mut self, input: &I) -> Result<(), Error> {
-        (*self.runtimes).borrow_mut().post_exec_all(input)
+    pub fn post_exec(&mut self, input_bytes: &[u8]) -> Result<(), Error> {
+        (*self.runtimes).borrow_mut().post_exec_all(input_bytes)
     }
 
     /// If stalker is enabled
@@ -731,12 +731,12 @@ where
 
     /// Ranges
     #[must_use]
-    pub fn ranges(&self) -> Ref<RangeMap<usize, (u16, String)>> {
+    pub fn ranges(&self) -> Ref<RangeMap<u64, (u16, String)>> {
         self.ranges.borrow()
     }
 
     /// Mutable ranges
-    pub fn ranges_mut(&mut self) -> RefMut<RangeMap<usize, (u16, String)>> {
+    pub fn ranges_mut(&mut self) -> RefMut<RangeMap<u64, (u16, String)>> {
         (*self.ranges).borrow_mut()
     }
 }

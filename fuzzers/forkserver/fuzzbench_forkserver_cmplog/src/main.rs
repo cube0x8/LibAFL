@@ -293,14 +293,14 @@ fn fuzz(
     println!("Let's fuzz :)");
 
     // Setup a MOPT mutator
-    let mutator = StdMOptMutator::new::<BytesInput, _>(
+    let mutator = StdMOptMutator::new(
         &mut state,
         havoc_mutations().merge(tokens_mutations()),
         7,
         5,
     )?;
 
-    let power: StdPowerMutationalStage<_, _, BytesInput, _, _> =
+    let power: StdPowerMutationalStage<_, _, BytesInput, _, _, _> =
         StdPowerMutationalStage::new(mutator);
 
     // A minimization+queue policy to get testcasess from the corpus
@@ -371,7 +371,8 @@ fn fuzz(
         let tracing = AFLppCmplogTracingStage::new(cmplog_executor, cmplog_ref);
 
         // Setup a randomic Input2State stage
-        let rq = MultiMutationalStage::new(AFLppRedQueen::with_cmplog_options(true, true));
+        let rq: MultiMutationalStage<_, _, BytesInput, _, _, _> =
+            MultiMutationalStage::new(AFLppRedQueen::with_cmplog_options(true, true));
 
         let cb = |_fuzzer: &mut _,
                   _executor: &mut _,

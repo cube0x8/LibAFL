@@ -5,7 +5,7 @@ use std::{
 };
 
 use libafl::{
-    executors::{Executor, ExitKind, HasObservers},
+    executors::{Executor, ExitKind, HasObservers, HasTimeout},
     inputs::HasTargetBytes,
     observers::{ObserversTuple, StdOutObserver},
     state::{HasExecutions, State, UsesState},
@@ -50,7 +50,6 @@ where
     EM: UsesState<State = S>,
     S: State + HasExecutions,
     S::Input: HasTargetBytes,
-    Z: UsesState<State = S>,
     OT: ObserversTuple<S::Input, S>,
 {
     fn run_target(
@@ -126,6 +125,28 @@ where
         }
 
         Ok(exit_kind)
+    }
+}
+
+impl<S, OT> HasTimeout for NyxExecutor<S, OT> {
+    fn timeout(&self) -> std::time::Duration {
+        self.helper.timeout
+    }
+
+    fn set_timeout(&mut self, timeout: std::time::Duration) {
+        let micros = 1000000;
+        let mut timeout_secs = timeout.as_secs();
+        let mut timeout_micros = timeout.as_micros() - u128::from(timeout.as_secs() * micros);
+        // since timeout secs is a u8 -> convert any overflow into micro secs
+        if timeout_secs > 255 {
+            timeout_micros = u128::from((timeout_secs - 255) * micros);
+            timeout_secs = 255;
+        }
+
+        self.helper.timeout = timeout;
+
+        self.helper
+            .set_timeout(timeout_secs as u8, timeout_micros as u32);
     }
 }
 

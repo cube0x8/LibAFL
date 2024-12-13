@@ -291,14 +291,14 @@ fn fuzz(
     println!("Let's fuzz :)");
 
     // Setup a MOPT mutator
-    let mutator = StdMOptMutator::new::<BytesInput, _>(
+    let mutator = StdMOptMutator::new(
         &mut state,
         havoc_mutations().merge(tokens_mutations()),
         7,
         5,
     )?;
 
-    let power: StdPowerMutationalStage<_, _, BytesInput, _, _> =
+    let power: StdPowerMutationalStage<_, _, BytesInput, _, _, _> =
         StdPowerMutationalStage::new(mutator);
 
     // A minimization+queue policy to get testcasess from the corpus
