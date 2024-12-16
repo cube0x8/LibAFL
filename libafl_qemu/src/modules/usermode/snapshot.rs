@@ -414,7 +414,7 @@ impl SnapshotModule {
                                 return true; // Restore later
                             }
                             
-                            log::debug!("Restoring page 0x{:x}", page);
+                            log::debug!("Restoring dirty page 0x{:x}", page);
                             unsafe { qemu.write_mem_unchecked(*page, &data[..]) };
                         } else {
                             panic!("Cannot restored a dirty but unsaved page");
@@ -424,6 +424,8 @@ impl SnapshotModule {
                 });
             }
         }
+
+        log::debug!("Dirty pages restored. Resetting mappings");
 
         self.reset_maps(qemu);
 
@@ -450,6 +452,7 @@ impl SnapshotModule {
                 if let Some(info) = self.pages.get_mut(page) {
                     // TODO avoid duplicated memcpy
                     if let Some(data) = info.data.as_ref() {
+                        log::debug!("Restoring unmapped page content 0x{:x}", page);
                         unsafe { qemu.write_mem_unchecked(*page, &data[..]) };
                     } else {
                         panic!("Cannot restored a dirty but unsaved page");
