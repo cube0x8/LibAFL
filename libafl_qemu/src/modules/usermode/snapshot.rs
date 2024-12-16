@@ -386,7 +386,7 @@ impl SnapshotModule {
             let new_maps = self.new_maps.get_mut().unwrap();
 
             log::debug!("Start restore");
-
+            
             for acc in &mut self.accesses {
                 unsafe { &mut (*acc.get()) }.dirty.retain(|page| {
                     if let Some(info) = self.pages.get_mut(page) {
@@ -529,15 +529,21 @@ impl SnapshotModule {
         let mut mapping = self.new_maps.lock().unwrap();
 
         let interval = Interval::new(start, start + (size as GuestAddr));
+
+        log::debug!("New map is 0x{:x} - 0x{:x}", start, start + size as GuestAddr);
+        
         let mut found = vec![]; //  TODO optimize
         for entry in mapping.tree.query(interval) {
             found.push((*entry.interval, entry.value.perms));
         }
 
+        log::debug!("Found {} overlapping mappings", found.len());
+
         for (i, perms) in found {
             let overlap = i.intersect(&interval).unwrap();
 
             mapping.tree.delete(i);
+            log::debug!("Deleting mapping 0x{:x} - 0x{:x}", i.start, i.end);
 
             if i.start < overlap.start {
                 mapping.tree.insert(
@@ -566,6 +572,7 @@ impl SnapshotModule {
                 changed: true,
             },
         );
+        log::debug!("Inserting new mapping 0x{:x} - 0x{:x}", interval.start, interval.end);
     }
 
     pub fn remove_mapped(&mut self, start: GuestAddr, mut size: usize) {
@@ -846,12 +853,14 @@ where
             h.access(a0, a1 as usize);
         }
         SYS_brk => {
+            log::debug!("Tracing SYS_brk syscall with argument: {:#x?}", result);
             let h = emulator_modules.get_mut::<SnapshotModule>().unwrap();
             if h.brk != result && result != 0 {
                 /* brk has changed. we change mapping from the snapshotted brk address to the new target_brk
                  * If no brk mapping has been made until now, change_mapped won't change anything and just create a new mapping.
                  * It is safe to assume RW perms here
                  */
+                log::debug!("brk has changed from {:#x?} to {:#x?}. Changing mapping to {:#x?}-{:#x?}", h.brk, result, h.brk, h.brk + (result - h.brk) as u64);
                 h.change_mapped(h.brk, (result - h.brk) as usize, Some(MmapPerms::ReadWrite));
             }
         }
