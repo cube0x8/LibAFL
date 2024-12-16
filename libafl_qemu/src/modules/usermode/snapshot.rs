@@ -414,7 +414,6 @@ impl SnapshotModule {
                                 return true; // Restore later
                             }
                             
-                            log::debug!("Restoring dirty page 0x{:x}", page);
                             unsafe { qemu.write_mem_unchecked(*page, &data[..]) };
                         } else {
                             panic!("Cannot restored a dirty but unsaved page");
@@ -452,7 +451,6 @@ impl SnapshotModule {
                 if let Some(info) = self.pages.get_mut(page) {
                     // TODO avoid duplicated memcpy
                     if let Some(data) = info.data.as_ref() {
-                        log::debug!("Restoring unmapped page content 0x{:x}", page);
                         unsafe { qemu.write_mem_unchecked(*page, &data[..]) };
                     } else {
                         panic!("Cannot restored a dirty but unsaved page");
@@ -531,7 +529,7 @@ impl SnapshotModule {
         let interval = Interval::new(start, start + (size as GuestAddr));
 
         log::debug!("New map is 0x{:x} - 0x{:x}", start, start + size as GuestAddr);
-        
+
         let mut found = vec![]; //  TODO optimize
         for entry in mapping.tree.query(interval) {
             found.push((*entry.interval, entry.value.perms));
