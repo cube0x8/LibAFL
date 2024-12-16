@@ -413,7 +413,8 @@ impl SnapshotModule {
                             if !found {
                                 return true; // Restore later
                             }
-
+                            
+                            log::debug!("Restoring page 0x{:x}", page);
                             unsafe { qemu.write_mem_unchecked(*page, &data[..]) };
                         } else {
                             panic!("Cannot restored a dirty but unsaved page");
