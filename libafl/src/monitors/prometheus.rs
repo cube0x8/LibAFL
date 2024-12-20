@@ -200,25 +200,7 @@ where
                 UserStatsValue::Number(n) => *n as f64,
                 UserStatsValue::Float(f) => *f,
                 UserStatsValue::String(_s) => 0.0,
-                UserStatsValue::Ratio(a, b) => {
-                    if key == "edges" {
-                        self.prometheus_global_stats
-                            .custom_stat
-                            .get_or_create(&Labels {
-                                client: Cow::from("global"),
-                                stat: Cow::from("edges_total"),
-                            })
-                            .set(*b as f64);
-                        self.prometheus_global_stats
-                            .custom_stat
-                            .get_or_create(&Labels {
-                                client: Cow::from("global"),
-                                stat: Cow::from("edges_hit"),
-                            })
-                            .set(*a as f64);
-                    }
-                    (*a as f64 / *b as f64) * 100.0
-                }
+                UserStatsValue::Ratio(a, b) => (*a as f64 / *b as f64) * 100.0,
                 UserStatsValue::Percent(p) => *p * 100.0,
             };
             self.prometheus_global_stats
@@ -411,17 +393,17 @@ pub(crate) async fn serve_metrics(
 
     // Register the global stats
     registry.register(
-        "global_corpus_count",
+        "corpus_count",
         "Number of test cases in the corpus",
         global_stats.corpus_count,
     );
     registry.register(
-        "global_objective_count",
+        "objective_count",
         "Number of times the objective has been achieved (e.g., crashes)",
         global_stats.objective_count,
     );
     registry.register(
-        "global_executions_total",
+        "executions_total",
         "Total number of executions",
         global_stats.executions,
     );
@@ -431,17 +413,17 @@ pub(crate) async fn serve_metrics(
         global_stats.exec_rate,
     );
     registry.register(
-        "global_runtime",
+        "runtime",
         "How long the fuzzer has been running for (seconds)",
         global_stats.runtime,
     );
     registry.register(
-        "global_clients_count",
+        "clients_count",
         "How many clients have been spawned for the fuzzing job",
         global_stats.clients_count,
     );
     registry.register(
-        "global_custom_stat",
+        "custom_stat",
         "A metric to contain custom stats returned by feedbacks, filterable by label (aggregated)",
         global_stats.custom_stat,
     );
