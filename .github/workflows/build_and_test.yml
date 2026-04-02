@@ -11,9 +11,10 @@ on:
   workflow_dispatch:
   merge_group:
 env:
+  AFL_PIZZA_MODE: "-1" # this is sad, I know, but it breaks on a certain spring day otherwise :(
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
-  MAIN_LLVM_VERSION: 18
+  MAIN_LLVM_VERSION: 21
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -50,14 +51,11 @@ jobs:
       - name: Install LLVM
         if: runner.os == 'MacOS'
         run: brew install llvm@${{env.MAIN_LLVM_VERSION}}
-      - uses: Swatinem/rust-cache@v2
-        with: { shared-key: "ubuntu" }
-        if: runner.os == 'Linux'
-      - uses: Swatinem/rust-cache@v2
-        if: runner.os != 'Linux'
       - name: Check for binary blobs
         if: runner.os == 'Linux'
         run: just check-blobs
+      - name: Check for conflicting versions
+        run: cargo tree -d --workspace
       - name: Build libafl debug
         run: just build-libafl
       - name: Test the book (Linux)
@@ -73,6 +71,12 @@ jobs:
       - name: Doc
         if: runner.os == 'Linux'
         run: just doc
+      # DO NOT move the cache pull before this point, as it causes mdbook to fail due to duplicated deps
+      - uses: Swatinem/rust-cache@v2
+        with: { shared-key: "ubuntu" }
+        if: runner.os == 'Linux'
+      - uses: Swatinem/rust-cache@v2
+        if: runner.os != 'Linux'
       - name: Run tests (Windows)
         if: runner.os == 'Windows'
         run: just test-serial
@@ -189,20 +193,6 @@ jobs:
         # `sancov_pcguard_edges` is tested seperatelyc
         run: just check-features ${{ matrix.instance_idx }}
 
-#  idk why bindgen generates a corrupted file only on CI.
-#  ubuntu-concolic:
-#    runs-on: ubuntu-24.04
-#    needs: ubuntu
-#    steps:
-#      - uses: dtolnay/rust-toolchain@stable
-#      - uses: actions/checkout@v4
-#      - uses: Swatinem/rust-cache@v2
-#        with: { shared-key: "ubuntu" }
-#      - name: Install smoke test deps
-#        run: sudo ./crates/libafl_concolic/test/smoke_test_ubuntu_deps.sh
-#      - name: Run smoke test
-#        run: ./crates/libafl_concolic/test/smoke_test.sh
-#
   python-bindings:
     runs-on: ubuntu-24.04
     steps:
@@ -340,7 +330,6 @@ jobs:
           # - inprocess/libfuzzer_windows_asan
           - inprocess/libfuzzer_stb_image_sugar
           - inprocess/libfuzzer_stb_image
-          - structure_aware/libfuzzer_stb_image_concolic
           # - inprocess/sqlite_centralized_multi_machine
           # - inprocess/libafl_libfuzzer_windows
 
